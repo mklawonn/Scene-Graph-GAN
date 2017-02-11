@@ -1,3 +1,5 @@
 
 
 Requirements: Tensorflow
+
+Tensorflow VGG-16 obtained from : https://github.com/ry/tensorflow-vgg16
