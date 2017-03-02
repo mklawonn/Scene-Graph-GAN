@@ -1,2 +1,4 @@
 data/*
 models/*
+tensorflow_venv/
+tensorflow_venv/*

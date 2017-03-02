@@ -1,61 +1,100 @@
-import skimage
-import skimage.io
-import skimage.transform
-import numpy as np
+from models import Image, Object, Attribute, Relationship
+from models import Region, Graph, QA, QAObject, Synset
+import httplib
+import json
 
-from os.path import expanduser
-home = expanduser("~")
-if not home.endswith("/"):
-    home = home + "/"
+"""
+Get the local directory where the Visual Genome data is locally stored.
+"""
+def GetDataDir():
+  from os.path import dirname, realpath, join
+  dataDir = join(dirname(realpath('__file__')), 'data')
+  return dataDir
 
-#synset = [l.strip() for l in open('synset.txt').readlines()]
+"""
+Helper Method used to get all data from request string.
+"""
+def RetrieveData(request):
+  connection = httplib.HTTPSConnection("visualgenome.org", '443')
+  connection.request("GET", request)
+  response = connection.getresponse()
+  jsonString = response.read()
+  data = json.loads(jsonString)
+  return data
 
-# returns image of shape [224, 224, 3]
-# [height, width, depth]
-def load_image(path):
-  # load image
-  img = skimage.io.imread(path)
-  img = img / 255.0
-  assert (0 <= img).all() and (img <= 1.0).all()
-  #print "Original Image Shape: ", img.shape
-  # we crop image from center
-  short_edge = min(img.shape[:2])
-  yy = int((img.shape[0] - short_edge) / 2)
-  xx = int((img.shape[1] - short_edge) / 2)
-  crop_img = img[yy : yy + short_edge, xx : xx + short_edge]
-  # resize to 224, 224
-  resized_img = skimage.transform.resize(crop_img, (224, 224))
-  return resized_img
+"""
+Helper to Extract Synset from canon object.
+"""
+def ParseSynset(canon):
+  if len(canon) == 0:
+    return None
+  return Synset(canon[0]['synset_name'], canon[0]['synset_definition'])
 
-# returns the top1 string
-def print_prob(prob):
-  #print prob
-  print "prob shape", prob.shape
-  pred = np.argsort(prob)[::-1]
+"""
+Helper to parse a Graph object from API data.
+"""
+def ParseGraph(data, image):
+  objects = []
+  object_map = {}
+  relationships = []
+  attributes = []
+  # Create the Objects
+  for obj in data['bounding_boxes']:
+    names = []
+    synsets = []
+    for s in obj['boxed_objects']:
+      names.append(s['name'])
+      synsets.append(ParseSynset(s['object_canon']))
+      object_ = Object(obj['id'], obj['x'], obj['y'], obj['width'], obj['height'], names, synsets)
+      object_map[obj['id']] = object_
+    objects.append(object_)
+  # Create the Relationships
+  for rel in data['relationships']:
+    relationships.append(Relationship(rel['id'], object_map[rel['subject']], \
+        rel['predicate'], object_map[rel['object']], ParseSynset(rel['relationship_canon'])))
+  # Create the Attributes
+  for atr in data['attributes']:
+    attributes.append(Attribute(atr['id'], object_map[atr['subject']], \
+        atr['attribute'], ParseSynset(atr['attribute_canon'])))
+  return Graph(image, objects, relationships, attributes)
 
-  # Get top1 label
-  top1 = pred[0]
-  #top1 = synset[pred[0]]
-  print "Top1: ", top1
-  # Get top5 label
-  top5 = [pred[i] for i in range(5)]
-  #top5 = [synset[pred[i]] for i in range(5)]
-  print "Top5: ", top5
-  return top1
+"""
+Helper to parse the image data for one image.
+"""
+def ParseImageData(data):
+  img_id = data['id'] if 'id' in data else data['image_id']
+  url = data['url']
+  width = data['width']
+  height = data['height']
+  coco_id = data['coco_id']
+  flickr_id = data['flickr_id']
+  image = Image(img_id, url, width, height, coco_id, flickr_id)
+  return image
 
-def compute_mean_for_images(image_dir):
-    num_images = 0
-    r_total = g_total = b_total = 0.0
-    r_mean = g_mean = b_mean = 0.0
-    for image_file in os.listdir(image_dir):
-        img = cv2.imread(image_dir + image_file).astype(np.float32)
-        r_total += np.sum(img[:,:,0]) / (img[:,:,0].shape[0] * img[:,:,0].shape[1])
-        g_total += np.sum(img[:,:,1]) / (img[:,:,1].shape[0] * img[:,:,1].shape[1])
-        b_total += np.sum(img[:,:,2]) / (img[:,:,2].shape[0] * img[:,:,2].shape[1])
-        num_images += 1
+"""
+Helper to parse region descriptions.
+"""
+def ParseRegionDescriptions(data, image):
+  regions = []
+  for d in data:
+    regions.append(Region(d['id'], image, d['phrase'], d['x'], d['y'], d['width'], d['height']))
+  return regions
 
-    r_mean = r_total / float(num_images)
-    g_mean = g_total / float(num_images)
-    b_mean = b_total / float(num_images)
-
-    return r_mean, g_mean, b_mean
+"""
+Helper to parse a list of question answers.
+"""
+def ParseQA(data, image_map):
+  qas = []
+  for d in data:
+    qos = []
+    aos = []
+    if 'question_objects' in d:
+      for qo in d['question_objects']:
+        synset = Synset(qo['synset_name'], qo['synset_definition'])
+        qos.append(QAObject(qo['entity_idx_start'], qo['entity_idx_end'], qo['entity_name'], synset))
+    if 'answer_objects' in d:
+      for ao in d['answer_objects']:
+        synset = Synset(o['synset_name'], ao['synset_definition'])
+        aos.append(QAObject(ao['entity_idx_start'], ao['entity_idx_end'], ao['entity_name'], synset))
+    qas.append(QA(d['qa_id'], image_map[d['image_id']], d['question'], d['answer'], qos, aos))
+  return qas

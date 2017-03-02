@@ -1,3 +1,8 @@
+""" Code adapted from Tensorflow Show Attend and Tell implementaion
+    available here: https://github.com/jazzsaxmafia/show_attend_and_tell.tensorflow
+    Orignal paper found here: https://arxiv.org/pdf/1502.03044.pdf"""
+
+
 import os
 import tensorflow as tf
 import numpy as np
@@ -48,6 +53,8 @@ class Generator(object):
         self.hidden_att_W = self.init_weight(dim_hidden, dim_context, name='hidden_att_W')
         self.pre_att_b = self.init_bias(dim_context, name='pre_att_b')
 
+        #I'm pretty sure this is the f_{att} model discussed in the paper
+        #(the attention model conditioned on h_{t-1}
         self.att_W = self.init_weight(dim_context, 1, name='att_W')
         self.att_b = self.init_bias(1, name='att_b')
 
@@ -78,23 +85,33 @@ class Generator(object):
 
     def build_model(self):
         #The context vector (\hat{z_t} in the paper) is a dynamic representation of a relevant part of an image 
-        # at time t
+        #at time t
+        #Here however, the context has more dimensions. The batch_size is obvious, but the context shape refers
+        #to the number of annotations and the dimensionality of each annotation
+        #i.e self.context_shape[0] = #annotations (called L in the paper) and self.context_shape[1] = #dimensions
+        #(D in the paper) The paper describes this in section 3.1.1
         context = tf.placeholder("float32", [self.batch_size, self.context_shape[0], self.context_shape[1]])
-        #The sentence is 
+        #The sentence represents the collection of words
         sentence = tf.placeholder("int32", [self.batch_size, self.n_lstm_steps])
         #The mask is
         mask = tf.placeholder("float32", [self.batch_size, self.n_lstm_steps])
 
-        h, c = self.get_initial_lstm(tf.reduce_mean(context, 1))
+        #From the paper: "The initial memory state and hidden state of the LSTM are predicted by an average
+        #of the annotation vectors fed through two separate MLPs (init,c and init,h)"
+        #This reduce mean call averages across the second dimension, i.e the L annotations 
+        h, c = self.get_initial_lstm(tf.reduce_mean(context, 1))#(batch_size, D)
 
         #The flattened context
+        #The tf.reshape function takes context and reshapes it so that the total number of elements
+        #remains constant. This is done by the -1 argument. So the shape will be [(batch_size*L), D]
         context_flat = tf.reshape(context, [-1, self.dim_context])
-        #
-        context_encode = tf.matmul(context_flat, self.image_att_W) # (batch_size, 196, 512)
-        context_encode = tf.reshape(context_encode, [-1, context_shape[0], context_shape[1]])
+        #Encode the context by multiplying by image attention weights
+        context_encode = tf.matmul(context_flat, self.image_att_W) # (batch_size*L, D)
+        context_encode = tf.reshape(context_encode, [-1, context_shape[0], context_shape[1]]) #(batch_size, L, D)
 
         loss = 0.0
 
+        #The number of lstm_steps is how many outputs the LSTM will make
         for ind in range(self.n_lstm_steps):
 
             if ind == 0:
@@ -104,12 +121,23 @@ class Generator(object):
                 with tf.device("/cpu:0"):
                     word_emb = tf.nn.embedding_lookup(self.Wemb, sentence[:,ind-1])
 
+            #This is the T_{D+m+n,n} affine transformation referred to in section 3.1.2
             x_t = tf.matmul(word_emb, self.lstm_W) + self.lstm_b # (batch_size, hidden*4)
 
+            #Extract the "ind"th word from each entry in the batch and combine into one column vector
             labels = tf.expand_dims(sentence[:,ind], 1)
+            #Indices is a column vector of numbers from 0 to 31 inclusive
             indices = tf.expand_dims(tf.range(0, self.batch_size, 1), 1)
-            concatenated = tf.concat(1, [indices, labels])
-            onehot_labels = tf.sparse_to_dense( concatenated, tf.pack([self.batch_size, self.vocab_size]), 1.0, 0.0)
+            concatenated = tf.concat(1, [indices, labels])# Shape: (batch_size, 2)
+            #Dense represenation of one_hot encoding
+            #For each i in [0, batch_size):
+            #onehot_labels[concatenated[i][0], concatenated[i][1]] = 1.0
+            #onehot_labels[indices[i], labels[i]] = 1.0 (all other values = 0.0)
+            #For example, the "ind"th word of the 0th example in the batch has a value x
+            #Then onehot_labels[0][x] = 1.0
+            #So for let's say that first sentence has values [x, y, z]
+            #Then onehot_labels[0][x] = 1.0, onehot_labels[0][y] = 0, and onehot_labels[0][z] = 0
+            onehot_labels = tf.sparse_to_dense( concatenated, tf.pack([self.batch_size, self.vocab_size]), 1.0, 0.0)#Shape: (batch_size, self.vocab_size)
 
             context_encode = context_encode + \
                  tf.expand_dims(tf.matmul(h, self.hidden_att_W), 1) + \
@@ -118,14 +146,21 @@ class Generator(object):
             context_encode = tf.nn.tanh(context_encode)
 
             #context_encode: 3D -> flat required
-            context_encode_flat = tf.reshape(context_encode, [-1, self.dim_context]) # (batch_size*196, 512)
-            alpha = tf.matmul(context_encode_flat, self.att_W) + self.att_b # (batch_size*196, 1)
-            alpha = tf.reshape(alpha, [-1, self.context_shape[0]])
+            context_encode_flat = tf.reshape(context_encode, [-1, self.dim_context]) # (batch_size*L, D)
+            alpha = tf.matmul(context_encode_flat, self.att_W) + self.att_b # (batch_size*L, 1)
+            alpha = tf.reshape(alpha, [-1, self.context_shape[0]]) # (batch_size, L)
+            #Alpha now represents the relative importance to give to each of the L annotations for 
+            #generating the next word
+            #TODO: Change this such that the model is restricted to focusing on a smaller subset of alphas
+            # maybe impose a penalty for this alpha being too different from the last alpha?
+            # would also have to change how it initializes then too
             alpha = tf.nn.softmax( alpha )
 
-            weighted_context = tf.reduce_sum(context * tf.expand_dims(alpha, 2), 1)
+            weighted_context = tf.reduce_sum(context * tf.expand_dims(alpha, 2), 1) #(batch_size, D)
 
             lstm_preactive = tf.matmul(h, self.lstm_U) + x_t + tf.matmul(weighted_context, self.image_encode_W)
+            #LSTM Computations
+            #tf.split(
             i, f, o, new_c = tf.split(1, 4, lstm_preactive)
 
             i = tf.nn.sigmoid(i)
@@ -231,119 +266,3 @@ def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed
     bias_init_vector = np.log(bias_init_vector)
     bias_init_vector -= np.max(bias_init_vector) # shift to nice numeric range
     return wordtoix, ixtoword, bias_init_vector
-
-
-###### Parameters ######
-n_epochs=1000
-batch_size=80
-dim_embed=256
-dim_context=512
-dim_hidden=256
-context_shape=[196,512]
-pretrained_model_path = './model/model-8'
-#############################
-###### Parameters #####
-annotation_path = './data/annotations.pickle'
-feat_path = './data/feats.npy'
-model_path = './model/'
-#############################
-
-
-def train(pretrained_model_path=pretrained_model_path):
-    annotation_data = pd.read_pickle(annotation_path)
-    captions = annotation_data['caption'].values
-    wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(captions)
-
-    learning_rate=0.001
-    vocab_size = len(wordtoix)
-    feats = np.load(feat_path)
-    maxlen = np.max( map(lambda x: len(x.split(' ')), captions) )
-
-    sess = tf.InteractiveSession()
-
-    caption_generator = Caption_Generator(
-            vocab_size=vocab_size,
-            dim_embed=dim_embed,
-            dim_context=dim_context,
-            dim_hidden=dim_hidden,
-            n_lstm_steps=maxlen+1, #
-            batch_size=batch_size,
-            context_shape=context_shape,
-            bias_init_vector=bias_init_vector)
-
-    loss, context, sentence, mask = caption_generator.build_model()
-    saver = tf.train.Saver(max_to_keep=50)
-
-    train_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
-    tf.initialize_all_variables().run()
-    if pretrained_model_path is not None:
-        print "Starting with pretrained model"
-        saver.restore(sess, pretrained_model_path)
-
-    index = list(annotation_data.index)
-    np.random.shuffle(index)
-    annotation_data = annotation_data.ix[index]
-
-    captions = annotation_data['caption'].values
-    image_id = annotation_data['image_id'].values
-
-    for epoch in range(n_epochs):
-        for start, end in zip( \
-                range(0, len(captions), batch_size),
-                range(batch_size, len(captions), batch_size)):
-
-            current_feats = feats[ image_id[start:end] ]
-            current_feats = current_feats.reshape(-1, context_shape[1], context_shape[0]).swapaxes(1,2)
-
-            current_captions = captions[start:end]
-            current_caption_ind = map(lambda cap: [wordtoix[word] for word in cap.lower().split(' ')[:-1] if word in wordtoix], current_captions) #
-
-            current_caption_matrix = sequence.pad_sequences(current_caption_ind, padding='post', maxlen=maxlen+1)
-
-            current_mask_matrix = np.zeros((current_caption_matrix.shape[0], current_caption_matrix.shape[1]))
-            nonzeros = np.array( map(lambda x: (x != 0).sum()+1, current_caption_matrix ))
-
-            for ind, row in enumerate(current_mask_matrix):
-                row[:nonzeros[ind]] = 1
-
-            _, loss_value = sess.run([train_op, loss], feed_dict={
-                context:current_feats,
-                sentence:current_caption_matrix,
-                mask:current_mask_matrix})
-
-            print "Current Cost: ", loss_value
-        saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
-
-def test(test_feat='./guitar_player.npy', model_path='./model/model-6', maxlen=20):
-    annotation_data = pd.read_pickle(annotation_path)
-    captions = annotation_data['caption'].values
-    wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(captions)
-    vocab_size = len(wordtoix)
-    feat = np.load(test_feat).reshape(-1, context_shape[1], context_shape[0]).swapaxes(1,2)
-
-    sess = tf.InteractiveSession()
-
-    caption_generator = Caption_Generator(
-            vocab_size=vocab_size,
-            dim_embed=dim_embed,
-            dim_context=dim_context,
-            dim_hidden=dim_hidden,
-            n_lstm_steps=maxlen,
-            batch_size=batch_size,
-            context_shape=context_shape)
-
-    context, generated_words, logit_list, alpha_list = caption_generator.build_generator(maxlen=maxlen)
-    saver = tf.train.Saver()
-    saver.restore(sess, model_path)
-
-    generated_word_index = sess.run(generated_words, feed_dict={context:feat})
-    alpha_list_val = sess.run(alpha_list, feed_dict={context:feat})
-    generated_words = [ixtoword[x[0]] for x in generated_word_index]
-    punctuation = np.argmax(np.array(generated_words) == '.')+1
-
-    generated_words = generated_words[:punctuation]
-    alpha_list_val = alpha_list_val[:punctuation]
-    return generated_words, alpha_list_val
-
-#    generated_sentence = ' '.join(generated_words)
-#    ipdb.set_trace()
