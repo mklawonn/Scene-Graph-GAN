@@ -44,7 +44,17 @@ def buildVocab(path_to_data):
 
 #TODO: One-hot (or dense one-hot) encoding of triple
 def encodeTriple(vocab, triple):
-    
+    #Dense represenation of one_hot encoding
+    #For each i in [0, batch_size):
+    #onehot_labels[concatenated[i][0], concatenated[i][1]] = 1.0
+    #onehot_labels[indices[i], labels[i]] = 1.0 (all other values = 0.0)
+    #For example, the "ind"th word of the 0th example in the batch has a value x
+    #Then onehot_labels[0][x] = 1.0
+    #So for let's say that first sentence has values [x, y, z]
+    #Then onehot_labels[0][x] = 1.0, onehot_labels[0][y] = 0, and onehot_labels[0][z] = 0
+    #onehot_labels = tf.sparse_to_dense( concatenated, tf.pack([self.batch_size, self.vocab_size]), 1.0, 0.0)#Shape: (batch_size, self.vocab_size)
+
+   
 
 def computeImageMean(image_dir):
     num_images = 0

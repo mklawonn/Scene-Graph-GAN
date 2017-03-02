@@ -126,7 +126,7 @@ class Generator(object):
 
             #Extract the "ind"th word from each entry in the batch and combine into one column vector
             labels = tf.expand_dims(sentence[:,ind], 1)
-            #Indices is a column vector of numbers from 0 to 31 inclusive
+            #Indices is a column vector of numbers from 0 to 31 (batch_size - 1) inclusive
             indices = tf.expand_dims(tf.range(0, self.batch_size, 1), 1)
             concatenated = tf.concat(1, [indices, labels])# Shape: (batch_size, 2)
             #Dense represenation of one_hot encoding
@@ -135,8 +135,10 @@ class Generator(object):
             #onehot_labels[indices[i], labels[i]] = 1.0 (all other values = 0.0)
             #For example, the "ind"th word of the 0th example in the batch has a value x
             #Then onehot_labels[0][x] = 1.0
-            #So for let's say that first sentence has values [x, y, z]
-            #Then onehot_labels[0][x] = 1.0, onehot_labels[0][y] = 0, and onehot_labels[0][z] = 0
+            #So for let's say that first sentence (i = 0) has values [x, y, z] and second has values [a, b, c] 
+            #vocab_size = 6 (a=0,b=1,c=2,x=3,y=4,z=5) and batch_size = 2
+            #Let's say we're on the first (ind = 0) column. So labels is the column_vector [[x],[a]]
+            #Then onehot_labels[0, x] = 1.0 and onehot_labels[1, a] =1.0
             onehot_labels = tf.sparse_to_dense( concatenated, tf.pack([self.batch_size, self.vocab_size]), 1.0, 0.0)#Shape: (batch_size, self.vocab_size)
 
             context_encode = context_encode + \
