@@ -138,7 +138,7 @@ class Generator(object):
             #So for let's say that first sentence (i = 0) has values [x, y, z] and second has values [a, b, c] 
             #vocab_size = 6 (a=0,b=1,c=2,x=3,y=4,z=5) and batch_size = 2
             #Let's say we're on the first (ind = 0) column. So labels is the column_vector [[x],[a]]
-            #Then onehot_labels[0, x] = 1.0 and onehot_labels[1, a] =1.0
+            #Then onehot_labels[0, x] = 1.0 and onehot_labels[1, a] = 1.0
             onehot_labels = tf.sparse_to_dense( concatenated, tf.pack([self.batch_size, self.vocab_size]), 1.0, 0.0)#Shape: (batch_size, self.vocab_size)
 
             context_encode = context_encode + \
@@ -177,6 +177,9 @@ class Generator(object):
             logits = tf.nn.relu(logits)
             logits = tf.nn.dropout(logits, 0.5)
 
+            #The loss calculated here is across the batch of words predicted at this particular timestep
+            #i.e for this column 
+            #TODO: Change this such that it's appropriate for a GAN
             logit_words = tf.matmul(logits, self.decode_word_W) + self.decode_word_b
             cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logit_words, onehot_labels)
             cross_entropy = cross_entropy * mask[:,ind]
