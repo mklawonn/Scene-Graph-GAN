@@ -9,50 +9,12 @@ from scipy.misc import imresize
 from itertools import izip_longest
 from tqdm import tqdm
 
-def buildVocab(path_to_data):
-    if os.path.exists("vocab.json"):
-        js = open("vocab.json").read()
-        return json.loads(js)
-    to_index_dict = {}
-    to_index_dict["is"] = 0
-    path_to_data += "/" if path_to_data[-1] != "/" else ""
-
-    scene_graphs = vg.GetSceneGraphs(startIndex=0, endIndex=-1,
-                   dataDir=path_to_data, imageDataDir="{}by_id/".format(path_to_data),
-                   minRels=0, maxRels=100)
-    for g in scene_graphs:
-        for i in g.relationships:
-            if str(i.subject).lower() not in to_index_dict.keys():
-                to_index_dict[str(i.subject).lower()] = len(to_index_dict.keys())
-            if str(i.predicate).lower() not in to_index_dict.keys():
-                to_index_dict[str(i.subject).lower()] = len(to_index_dict.keys())
-            if str(i.object).lower() not in to_index_dict.keys():
-                to_index_dict[str(i.object).lower()] = len(to_index_dict.keys())
-        for o in g.objects:
-            if str(o).lower() not in to_index_dict.keys():
-                to_index_dict[str(i.subject).lower()] = len(to_index_dict.keys())
-            for attribute in o.attributes:
-                if str(attribute).lower() not in to_index_dict.keys():
-                    to_index_dict[str(i.subject).lower()] = len(to_index_dict.keys())
-    with open("vocab.json", "w") as f:
-        json.dump(to_index_dict, f)
-    
-    return to_index_dict
-
-def encodeTriple(vocab, triple):
-    #This is a dense representation of the sequence 
-    triple = triple.split()
-    dense = [0]*len(triple)
-    for i in xrange(len(triple)):
-        dense[i] = vocab[triple[i]]
-    return dense
-
 def computeImageMean(image_dir):
     if os.path.exists("image_mean.txt"):
         means = open("image_mean.txt", "r").read().strip().split()
-        r_mean = means[0]
-        g_mean = means[1]
-        b_mean = means[2]
+        r_mean = float(means[0])
+        g_mean = float(means[1])
+        b_mean = float(means[2])
         return r_mean, g_mean, b_mean
     image_dir += "/" if image_dir[-1] != "/" else ""
     num_images = 0
@@ -61,10 +23,14 @@ def computeImageMean(image_dir):
     for image_file in os.listdir(image_dir):
         #img = cv2.imread(image_dir + image_file).astype(np.float32)
         try:
-            img = np.array(Image.open("{}{}".format(image_dir, image_file)))
+            img = Image.open("{}{}".format(image_dir, image_file))
+            img.load()
+            img = np.array(img)
         except:
+            #print "Error loading image"
             continue
         img = imresize(img, (224, 224, 3))
+        img = np.array(img, dtype=np.float32)
         #Ignore grayscale images
         if img.shape != (224, 224, 3):
             continue
@@ -82,12 +48,94 @@ def computeImageMean(image_dir):
 
     return r_mean, g_mean, b_mean
 
+def buildVocab(path_to_data):
+    if os.path.exists("./vocab.json"):
+        with open("./vocab.json", "r") as f:
+            vocab = json.load(f)
+        return vocab
+    vocab = {}
+    vocab[u"is"] = 0
+    with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
+        sg_dict = {sg['image_id']:sg for sg in json.load(f)}
+
+    for i in tqdm(sg_dict):
+        for o in sg_dict[i]["objects"]:
+            if "synsets" in o:
+                if len(o["synsets"]) > 0:
+                    wordnet_synset = o["synsets"][0]
+                    if not wordnet_synset in vocab:
+                        vocab[wordnet_synset] = len(vocab)
+                elif "names" in o:
+                    name = o["names"][0]
+                    if not name in vocab:
+                        vocab[name] = len(vocab)
+            elif "names" in o:
+                name = o["names"][0]
+                if not name in vocab:
+                    vocab[name] = len(vocab)
+            if "attributes" in o:
+                for attribute in o["attributes"]:
+                    if not attribute in vocab:
+                        vocab[attribute] = len(vocab)
+        for r in sg_dict[i]["relationships"]:
+            if "synsets" in r:
+                if len(r["synsets"]) > 0:
+                    predicate = r["synsets"][0]
+                else:
+                    predicate = r["predicate"]
+            else:
+                predicate = r["predicate"]
+            if not predicate in vocab:
+                vocab[predicate] = len(vocab)
+            #The subject and object should both already be added
+            #via the objects loop above
+
+    with open("./vocab.json", "w") as f:
+        json.dump(vocab, f)
+
+    return vocab
+
+#For a single scene graph, return the attribute and relationship triples
+def parseSceneGraph(sg):
+    attributes = []
+    relationships = []
+    ob_id_dict = {}
+    for o in sg["objects"]
+        if "synsets" in o:
+            if len(o["synsets"]) > 0:
+                name = o["synsets"][0]
+            elif "names" in o:
+                name = o["names"][0]
+        elif "names" in o:
+            name = o["names"][0]
+        ob_id_dict[o["object_id"]] = name
+        if "attributes" in o:
+            for attribute in o["attributes"]:
+                attributes.append((name, u"is", attribute))
+    for r in sg_dict[i]["relationships"]:
+        if "synsets" in r:
+            if len(r["synsets"]) > 0:
+                predicate = r["synsets"][0]
+            else:
+                predicate = r["predicate"]
+        else:
+            predicate = r["predicate"]
+        relationships.append((ob_id_dict[r["subject_id"]], predicate, ob_id_dict[r["object_id"]]))
+    return attributes, relationships
+
+def encodeTriple(vocab, subject, predicate, object):
+    #This is a dense representation of the sequence 
+    dense = [0,0,0]
+    dense[0] = vocab[subject]
+    dense[1] = vocab[predicate]
+    dense[2] = vocab[object]
+    return dense
+
 def grouper(iterable, n, fillvalue=None):
     args = [iter(iterable)] * n
     return izip_longest(*args, fillvalue=fillvalue)
 
 def readInTensorflowModel(vgg_tf_model):
-    print "Loading feature extractor"
     #Load VGG Feature Extractor
     with open(vgg_tf_model, mode="rb") as f:
         file_content = f.read()
@@ -101,6 +149,13 @@ def readInTensorflowModel(vgg_tf_model):
 
     graph = tf.get_default_graph()
     return graph
+
+def smoothAndNormalizeImg(im, r_mean, g_mean, b_mean):
+    im[:,:,0] -= r_mean
+    im[:,:,1] -= g_mean
+    im[:,:,2] -= b_mean
+    im = filters.gaussian_filter(im, 2, mode='nearest')
+    return im
  
 
 def imageDataGenerator(path_to_data, image_files, graph, image_means, vocab, chunk_size = 2500):
@@ -115,30 +170,34 @@ def imageDataGenerator(path_to_data, image_files, graph, image_means, vocab, chu
         ids = []
         attributes_relationships = []
         images = []
-        for f in group:
+        for f in tqdm(group):
             if f == None:
                 break
             try:
-                im = np.array(Image.open(f), dtype=np.float32)
+                im = Image.open(f)
+                im.load()
+                im = np.array(im)
             except:
                 continue
             im = imresize(im, (224, 224, 3))
+            #Imresize casts back to uint8 for some reason
+            im = np.array(im, dtype=np.float32)
             #Skip grayscale images
-            if img.shape != (224, 224, 3):
+            if im.shape != (224, 224, 3):
                 continue
             ids.append(int(f[f.rfind("/")+1:-4]))
-            graph = vg.GetSceneGraph(ids[-1], images=path_to_images, imageDataDir="{}by_id/".format(path_to_data))
-            #First add the relationships
-            attributes_relationships.append([encodeTriple("{} {} {}".format(str(i.subject), str(i.predicate).lower(), str(i.object))) \
-                             for i in graph.relationships])
+            try:
+                graph = vg.GetSceneGraph(ids[-1], images=path_to_data, imageDataDir="{}by_id/".format(path_to_data))
+            except:
+                continue
+            attributes_relationships.append([])
+            for i in graph.relationships:
+                attributes_relationships[-1].append(encodeTriple(vocab, i.subject, i.predicate, i.object))
             for o in graph.objects:
                 for attribute in o.attributes:
-                    attributes_relationships[-1].append(encodeTriple("{} is {}".format(o, attribute)))
-            im[:,:,0] -= r_mean
-            im[:,:,1] -= g_mean
-            im[:,:,2] -= b_mean
-            im = filters.gaussian_filter(im, 2, mode='nearest')
-            images.append(im)
+                    attributes_relationships[-1].append(encodeTriple(vocab, o, "is", attribute))
+                images.append(smoothAndNormalizeImg(im, r_mean, g_mean, b_mean))
+        im_placeholder = tf.placeholder("float", [None, 224, 224, 3])
         with tf.Session() as sess:
             init = tf.global_variables_initializer()
             sess.run(init)
@@ -165,16 +224,27 @@ def _bytes_feature_list(values):
 def toTFRecord(path_to_data, vgg_tf_model):
     path_to_data += "/" if path_to_data[-1] != "/" else ""
     path_to_images = path_to_data + "all_images/"
+    print "Computing Image Mean"
     r_mean, g_mean, b_mean = computeImageMean(path_to_images)
     image_means = [r_mean, g_mean, b_mean]
+    print "Done"
 
-    image_files = ["{}{}.jpg".format(path_to_images, im_path) \
-            for im_path in sorted([int(i.replace(".jpg", "")) for i in os.listdir(path_to_images)])]
+    with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
+        sg_dict = {sg['image_id']:sg for sg in json.load(f)}
 
+    image_files = ["{}{}.jpg".format(path_to_images, im_id) \
+            for im_id in sorted(sg_dict)]
+
+    print "Reading in tensorflow model"
     graph = readInTensorflowModel(vgg_tf_model)
+    print "Done"
+    print "Building vocabulary"
     vocab = buildVocab(path_to_data)
+    print "Done"
 
+    print "Creating image generator"
     im_generator = imageDataGenerator(path_to_data, image_files, graph, image_means, vocab)
+    print "Done"
     count = 0
     path_to_data += "/" if path_to_data[-1] != "/" else ""
     for image_feats, id_batch, att_rels_batch in im_generator:

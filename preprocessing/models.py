@@ -87,7 +87,8 @@ class Object:
 
   def __str__(self):
     name = self.names[0] if len(self.names) != 0 else 'None'
-    return '%s' % (name)
+    #return '%s' % (name)
+    return unicode(name).encode("utf-8")
 
   def __repr__(self):
     return str(self)
