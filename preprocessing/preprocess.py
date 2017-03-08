@@ -158,55 +158,44 @@ def smoothAndNormalizeImg(im, r_mean, g_mean, b_mean):
     return im
  
 
-def imageDataGenerator(path_to_data, image_files, graph, image_means, vocab, chunk_size = 2500):
+def imageDataGenerator(path_to_data, image_files, tf_graph, image_means, vocab, chunk_size = 2500):
     path_to_data += "/" if path_to_data[-1] != "/" else ""
-    path_to_images = path_to_data + "all_images/"
     #Iterate over chunk_sized groups of images, generating features and yielding them
     #along with the attributes and relationships of the image
     r_mean = image_means[0]
     g_mean = image_means[1]
     b_mean = image_means[2]
-    for group in grouper(image_files, chunk_size):
-        ids = []
+
+    with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
+        sg_dict = {sg['image_id']:sg for sg in json.load(f)}
+
+    for group in grouper(sg_dict, chunk_size):
         attributes_relationships = []
         images = []
-        for f in tqdm(group):
-            if f == None:
+        for im_id in tqdm(group):
+            if im_id == None:
                 break
-            try:
-                im = Image.open(f)
-                im.load()
-                im = np.array(im)
-            except:
-                continue
+            im = Image.open(image_files[im_id])
+            im.load()
             im = imresize(im, (224, 224, 3))
             #Imresize casts back to uint8 for some reason
             im = np.array(im, dtype=np.float32)
             #Skip grayscale images
             if im.shape != (224, 224, 3):
                 continue
-            ids.append(int(f[f.rfind("/")+1:-4]))
-            try:
-                graph = vg.GetSceneGraph(ids[-1], images=path_to_data, imageDataDir="{}by_id/".format(path_to_data))
-            except:
-                continue
-            attributes_relationships.append([])
-            for i in graph.relationships:
-                attributes_relationships[-1].append(encodeTriple(vocab, i.subject, i.predicate, i.object))
-            for o in graph.objects:
-                for attribute in o.attributes:
-                    attributes_relationships[-1].append(encodeTriple(vocab, o, "is", attribute))
-                images.append(smoothAndNormalizeImg(im, r_mean, g_mean, b_mean))
+            images.append(smoothAndNormalizeImg(im, r_mean, g_mean, b_mean))
+            attributes, relations = parseSceneGraph(sg_dict[im_id])
+            attributes_relationships.append((attributes, relations))
         im_placeholder = tf.placeholder("float", [None, 224, 224, 3])
         with tf.Session() as sess:
             init = tf.global_variables_initializer()
             sess.run(init)
             feed_dict = {im_placeholder:images}
-            feat_tensor = graph.get_tensor_by_name("import/conv5_3/Relu:0")
+            feat_tensor = tf_graph.get_tensor_by_name("import/conv5_3/Relu:0")
             feats = sess.run(feat_tensor)
         feats = np.reshape(feats, (-1, feats.shape[2]))
         #feats = np.array(feats, dtype=np.float32)
-        yield feats, ids, attributes_relations
+        yield feats, group, attributes_relations
 
 def _int64_feature(value):
     return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
@@ -258,6 +247,7 @@ def toTFRecord(path_to_data, vgg_tf_model):
             #TODO: Rather than truncating to 10 you could pad up to the max
             #And then during training ignore the padding triples
             #TODO: You could at least make this random
+            #TODO Make sure this is still the way you should be reading this in
             first_ten = [bytearray(att_rels_batch[j]) for j in xrange(10)]
             #Construct the Example proto object
             context = tf.train.Features(feature={
