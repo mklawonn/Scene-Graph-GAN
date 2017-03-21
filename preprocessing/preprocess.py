@@ -48,15 +48,15 @@ def computeImageMean(image_dir):
 
     return r_mean, g_mean, b_mean
 
-def buildVocab(path_to_data):
+def buildVocab(sg_dict):
     if os.path.exists("./vocab.json"):
         with open("./vocab.json", "r") as f:
             vocab = json.load(f)
         return vocab
     vocab = {}
     vocab[u"is"] = 0
-    with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
-        sg_dict = {sg['image_id']:sg for sg in json.load(f)}
+    """with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
+        sg_dict = {sg['image_id']:sg for sg in json.load(f)}"""
 
     for i in tqdm(sg_dict):
         for o in sg_dict[i]["objects"]:
@@ -100,7 +100,7 @@ def parseSceneGraph(sg):
     attributes = []
     relationships = []
     ob_id_dict = {}
-    for o in sg["objects"]
+    for o in sg["objects"]:
         if "synsets" in o:
             if len(o["synsets"]) > 0:
                 name = o["synsets"][0]
@@ -112,7 +112,7 @@ def parseSceneGraph(sg):
         if "attributes" in o:
             for attribute in o["attributes"]:
                 attributes.append((name, u"is", attribute))
-    for r in sg_dict[i]["relationships"]:
+    for r in sg["relationships"]:
         if "synsets" in r:
             if len(r["synsets"]) > 0:
                 predicate = r["synsets"][0]
@@ -143,12 +143,10 @@ def readInTensorflowModel(vgg_tf_model):
     graph_def = tf.GraphDef()
     graph_def.ParseFromString(file_content)
 
-    im_placeholder = tf.placeholder("float", [None, 224, 224, 3])
+    return graph_def
 
-    tf.import_graph_def(graph_def, input_map={"images" : im_placeholder})
 
-    graph = tf.get_default_graph()
-    return graph
+    #return graph
 
 def smoothAndNormalizeImg(im, r_mean, g_mean, b_mean):
     im[:,:,0] -= r_mean
@@ -158,7 +156,7 @@ def smoothAndNormalizeImg(im, r_mean, g_mean, b_mean):
     return im
  
 
-def imageDataGenerator(path_to_data, image_files, tf_graph, image_means, vocab, chunk_size = 2500):
+def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = 128):
     path_to_data += "/" if path_to_data[-1] != "/" else ""
     #Iterate over chunk_sized groups of images, generating features and yielding them
     #along with the attributes and relationships of the image
@@ -166,36 +164,55 @@ def imageDataGenerator(path_to_data, image_files, tf_graph, image_means, vocab, 
     g_mean = image_means[1]
     b_mean = image_means[2]
 
-    with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
-        sg_dict = {sg['image_id']:sg for sg in json.load(f)}
+    """with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
+        sg_dict = {sg['image_id']:sg for sg in json.load(f)}"""
 
-    for group in grouper(sg_dict, chunk_size):
+
+    im_placeholder = tf.placeholder("float", [None, 224, 224, 3])
+    tf.import_graph_def(tf_graph, input_map={"images" : im_placeholder})
+    graph = tf.get_default_graph()
+
+    for group in grouper(image_files, chunk_size):
         attributes_relationships = []
         images = []
-        for im_id in tqdm(group):
+        ids = []
+        for im_id in group:
             if im_id == None:
                 break
             im = Image.open(image_files[im_id])
             im.load()
             im = imresize(im, (224, 224, 3))
             #Imresize casts back to uint8 for some reason
-            im = np.array(im, dtype=np.float32)
+            im = np.array(im, dtype=np.float64)
+            #Shouldn't have to do this anymore, since I'm filtering out grayscale images
             #Skip grayscale images
-            if im.shape != (224, 224, 3):
-                continue
-            images.append(smoothAndNormalizeImg(im, r_mean, g_mean, b_mean))
+            #if im.shape != (224, 224, 3):
+            #    continue
             attributes, relations = parseSceneGraph(sg_dict[im_id])
-            attributes_relationships.append((attributes, relations))
-        im_placeholder = tf.placeholder("float", [None, 224, 224, 3])
+            #Shouldn't have to do this anymore, since we're filtering out images
+            #that don't have enough information attached to them, all in the name
+            #of predictable batch sizes
+            #if (len(attributes) + len(relations)) < 10:
+            #    continue
+            ids.append(im_id)
+            images.append(smoothAndNormalizeImg(im, r_mean, g_mean, b_mean))
+            attributes.extend(relations)
+            encoded_attributes = []
+            for a in attributes:
+                encoded_attributes.append(encodeTriple(vocab, a[0], a[1], a[2]))
+            attributes_relationships.append(encoded_attributes)
+        #im_placeholder = tf.placeholder("float", [None, 224, 224, 3])
         with tf.Session() as sess:
             init = tf.global_variables_initializer()
             sess.run(init)
-            feed_dict = {im_placeholder:images}
-            feat_tensor = tf_graph.get_tensor_by_name("import/conv5_3/Relu:0")
-            feats = sess.run(feat_tensor)
-        feats = np.reshape(feats, (-1, feats.shape[2]))
+            feed_dict = { im_placeholder:np.array(images, dtype=np.float32) }
+            feat_tensor = graph.get_tensor_by_name("import/conv5_3/Relu:0")
+            feats = sess.run(feat_tensor, feed_dict = feed_dict)
+        feats = np.reshape(feats, (feats.shape[0], -1, feats.shape[3]))
         #feats = np.array(feats, dtype=np.float32)
-        yield feats, group, attributes_relations
+        #Each of these should contain the full chunk_size elements
+        #Except for when the generator runs out of files
+        yield feats, ids, attributes_relationships
 
 def _int64_feature(value):
     return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
@@ -204,10 +221,24 @@ def _bytes_feature(value):
     return tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(value)]))
 
 def _int64_feature_list(values):
-    return tf.train.FeatureList(feature=[int_64_feature(v) for v in values])
+    return tf.train.FeatureList(feature=[_int64_feature(v) for v in values])
+
+def _int64_nested_feature_list(values):
+    return tf.train.FeatureList(feature=[tf.train.Feature(int64_list=tf.train.Int64List(value=v)) for v in values])
 
 def _bytes_feature_list(values):
     return tf.train.FeatureList(feature=[_bytes_feature(v) for v in values])
+
+def checkGrayscale(im_path):
+    im = Image.open(im_path)
+    im.load()
+    im = np.array(im)
+    return len(im.shape) == 2
+
+def enoughElements(sg_dict, im_id):
+    attributes, relations = parseSceneGraph(sg_dict[im_id])
+    return (len(attributes) + len(relations)) >= 10
+    
 
 #Inspired by https://github.com/tensorflow/models/blob/master/im2txt/im2txt/data/build_mscoco_data.py
 def toTFRecord(path_to_data, vgg_tf_model):
@@ -218,21 +249,36 @@ def toTFRecord(path_to_data, vgg_tf_model):
     image_means = [r_mean, g_mean, b_mean]
     print "Done"
 
+    print "Creating list of files which have a scene graph,\
+         excluding grayscale and images with less than 10 combined relations and attributes"
     with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
         sg_dict = {sg['image_id']:sg for sg in json.load(f)}
 
-    image_files = ["{}{}.jpg".format(path_to_images, im_id) \
-            for im_id in sorted(sg_dict)]
+    #Has to be a dict rather than a list because certain im_ids might not have associated scene graphs
+    #If a list were used it could results in list index out of range errors
+    #We're filtering out grayscale images
+    image_files = {im_id:"{}{}.jpg".format(path_to_images, im_id) \
+            for im_id in sorted(sg_dict) if not checkGrayscale("{}{}.jpg".format(path_to_images, im_id))}
+    #Also filter out those files which don't have at least ten combined relationships and attributes
+    bad = []
+    for im_id in image_files:
+        if not enoughElements(sg_dict, im_id):
+            bad.append(im_id)
+    image_files = {im_id:image_files[im_id] for im_id in image_files if im_id not in bad}
+    print "Done"
 
     print "Reading in tensorflow model"
-    graph = readInTensorflowModel(vgg_tf_model)
+    tf_graph = readInTensorflowModel(vgg_tf_model)
     print "Done"
     print "Building vocabulary"
-    vocab = buildVocab(path_to_data)
+    vocab = buildVocab(sg_dict)
     print "Done"
 
     print "Creating image generator"
-    im_generator = imageDataGenerator(path_to_data, image_files, graph, image_means, vocab)
+    #Note that any batch significantly larger than 128 might cause a GPU OOM
+    #e.g on a 12GB Titan X a batch size of 256 was too big
+    batch_size = 128
+    im_generator = imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = batch_size)
     print "Done"
     count = 0
     path_to_data += "/" if path_to_data[-1] != "/" else ""
@@ -240,22 +286,31 @@ def toTFRecord(path_to_data, vgg_tf_model):
         path_to_tf_records = "{}tf_records/batch_{}.tfrecords".format(path_to_data, count)
         count += 1
         writer = tf.python_io.TFRecordWriter(path_to_tf_records)
+        #This should happen at most once, when the generator runs out of files
+        if len(id_batch) != batch_size:
+            print "Not a regular sized batch!"
         for i in xrange(len(id_batch)):
             im_raw = image_feats[i].tostring()
             num_feats = image_feats[i].shape[0] 
             feat_dim = image_feats[i].shape[1]
             #TODO: Rather than truncating to 10 you could pad up to the max
             #And then during training ignore the padding triples
-            #TODO: You could at least make this random
-            #TODO Make sure this is still the way you should be reading this in
-            first_ten = [bytearray(att_rels_batch[j]) for j in xrange(10)]
+            #Recall that att_rels_batch is a list (chunk_size (or less) elements long)
+            #Where each element is a list corresponding to a particular image. Each element
+            #contains tuples which correspond to triples, a subject predicate and object
+            #describing objects in the image. Of course these tuples are indices into the vocab
+            #So att_rels_batch[i][j] is a tuple of ints
+            ten = []
+            for j in np.random.choice([q for q in xrange(len(att_rels_batch[i]))], size=10, replace=False):
+                #print att_rels_batch[i][j]
+                ten.append(att_rels_batch[i][j])
             #Construct the Example proto object
             context = tf.train.Features(feature={
                 "image/image_id": _int64_feature(id_batch[i]),
                 "image/data": _bytes_feature(im_raw),
             })
             feature_lists = tf.train.FeatureLists(feature_list={
-                "image/triples": _bytes_feature_list(first_ten),
+                "image/triples": _int64_nested_feature_list(ten),
             })
             sequence_example = tf.train.SequenceExample(
                 context=context, feature_lists=feature_lists)
