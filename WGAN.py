@@ -7,17 +7,16 @@ import tensorflow as tf
 import numpy as np
 import os, sys, inspect
 import time
+from tqdm import tqdm
 
 class GAN(object):
-    def __init__(self, z_dim, crop_image_size, resized_image_size, batch_size, data_dir):
-        celebA_dataset = celebA.read_dataset(data_dir)
-        self.z_dim = z_dim
-        self.crop_image_size = crop_image_size
-        self.resized_image_size = resized_image_size
+    def __init__(self, tf_record_dir, batch_size=128):
         self.batch_size = batch_size
-        filename_queue = tf.train.string_input_producer(celebA_dataset.train_images)
-        self.images = self._read_input_queue(filename_queue)
+        tf_record_dir += "/" if tf_record_dir[-1] != "/" else ""
+        filename_queue = tf.train.string_input_producer(["{}{}".format(tf_record_dir, i) for i in os.listdir(tf_record_dir)])
+        self.images_and_captions = self._read_input_queue(filename_queue)
 
+    #TODO: Change this _read_input to read in the values stored in your tf records
     def _read_input(self, filename_queue):
         class DataRecord(object):
             pass
@@ -261,11 +260,11 @@ class GAN(object):
 
 
 class WasserstienGAN(GAN):
-    def __init__(self, z_dim, crop_image_size, resized_image_size, batch_size, data_dir, clip_values=(-0.01, 0.01),
+    def __init__(self, z_dim, crop_image_size, resized_image_size, batch_size, tf_record_dir, clip_values=(-0.01, 0.01),
                  critic_iterations=5):
         self.critic_iterations = critic_iterations
         self.clip_values = clip_values
-        GAN.__init__(self, z_dim, crop_image_size, resized_image_size, batch_size, data_dir)
+        GAN.__init__(self, z_dim, crop_image_size, resized_image_size, batch_size, tf_record_dir)
 
     def _generator(self, z, dims, train_phase, activation=tf.nn.relu, scope_name="generator"):
         N = len(dims)
@@ -298,6 +297,7 @@ class WasserstienGAN(GAN):
 
         return pred_image
 
+    #Also called a critic
     def _discriminator(self, input_images, dims, train_phase, activation=tf.nn.relu, scope_name="discriminator",
                        scope_reuse=False):
         N = len(dims)
@@ -343,7 +343,7 @@ class WasserstienGAN(GAN):
                 feed_dict = {self.z_vec: batch_z, self.train_phase: train_phase}
                 return feed_dict
 
-            for itr in xrange(1, max_iterations):
+            for itr in tqdm(xrange(1, max_iterations)):
                 if itr < 25 or itr % 500 == 0:
                     critic_itrs = 25
                 else:
