@@ -1,273 +1,69 @@
-""" Code adapted from Tensorflow Show Attend and Tell implementaion
-    available here: https://github.com/jazzsaxmafia/show_attend_and_tell.tensorflow
-    Orignal paper found here: https://arxiv.org/pdf/1502.03044.pdf"""
-
-
-import os
 import tensorflow as tf
-import numpy as np
-
-from tensorflow.models.rnn import rnn, rnn_cell
-
-
 
 class Generator(object):
-    def init_weight(self, dim_in, dim_out, name=None, stddev=1.0):
-        return tf.Variable(tf.truncated_normal([dim_in, dim_out], stddev=stddev/math.sqrt(float(dim_in))), name=name)
-
-    def init_bias(self, dim_out, name=None):
-        return tf.Variable(tf.zeros([dim_out]), name=name)
-
-    def __init__(self, vocab_size, dim_embed, dim_context, dim_hidden, n_lstm_steps, batch_size=200, context_shape=[196,512], bias_init_vector=None):
+    def __init__(self, vocab_size, lstm_cell_size=512, dim_context=512, maxlen=3, batch_size=64, context_shape=[196,512], bias_init_vector=None):
         self.vocab_size = vocab_size
-        self.dim_embed = dim_embed
+        self.lstm_cell_size = lstm_cell_size
         self.dim_context = dim_context
-        self.dim_hidden = dim_hidden
         self.context_shape = context_shape
-        self.n_lstm_steps = n_lstm_steps
+        self.maxlen = maxlen
         self.batch_size = batch_size
 
-        #TODO: Replace this initialization with pre-trained word embeddings
-        #Initialize the word embeddings
-        with tf.device("/cpu:0"):
-            self.Wemb = tf.Variable(tf.random_uniform([vocab_size, dim_embed], -1.0, 1.0), name='Wemb')
+    def build_generator(self, context):
+        #context = tf.placeholder("float32", [None, self.context_shape[0], self.context_shape[1]])
 
-        #Initial hidden state of LSTM
-        self.init_hidden_W = self.init_weight(dim_context, dim_hidden, name='init_hidden_W')
-        self.init_hidden_b = self.init_bias(dim_hidden, name='init_hidden_b')
+        #First permute the input randomly
+        #Switch dim 0 and 1
+        context = tf.transpose(context, perm=[1,0,2])
+        #Shuffle along dim 0
+        context = tf.random_shuffle(context)
+        #Switch back
+        context = tf.transpose(context, perm=[1,0,2])
+        #TODO At test time won't you need to figure out which features ended up where?
+        #keep track of the shuffling to do spatial correlation
 
-        #Initial memory of LSTM
-        self.init_memory_W = self.init_weight(dim_context, dim_hidden, name='init_memory_W')
-        self.init_memory_b = self.init_bias(dim_hidden, name='init_memory_b')
+        with tf.variable_scope("encoder"):
+            #Then encode the input sequence
+            #Declare sequence reader
+            encoder = tf.contrib.rnn.LSTMCell(self.lstm_cell_size, use_peepholes=True)
+            #The size of the attention window. Currently pays attention to image feats in thirds
+            attn_length = int(self.context_shape[0] / 3)
+            #TODO Understand math behind this attention model
+            attention_wrapped_encoder = tf.contrib.rnn.AttentionCellWrapper(encoder, attn_length=attn_length, state_is_tuple=True)
+            #Output is of shape [batch_size, max_len, cell.output_size]
+            encoder_output, _ = tf.nn.dynamic_rnn(attention_wrapped_encoder, context, swap_memory=True, dtype=tf.float32)
+            #Transpose to put time as first dim
+            encoder_output = tf.transpose(encoder_output, perm=[1, 0, 2])
 
-        #Initialize LSTM Weights
-        self.lstm_W = self.init_weight(dim_embed, dim_hidden*4, name='lstm_W')
-        self.lstm_U = self.init_weight(dim_hidden, dim_hidden*4, name='lstm_U')
-        self.lstm_b = self.init_bias(dim_hidden*4, name='lstm_b')
+        with tf.variable_scope("decoder"):
+            #Now decode
+            decoder = tf.contrib.rnn.LSTMCell(self.lstm_cell_size, use_peepholes=True)
+            attention_wrapped_decoder = tf.contrib.rnn.AttentionCellWrapper(decoder, attn_length=3, state_is_tuple=True)
+            #Select the outputs from the encoder at regular "attn_length" long intervals
+            feat_indices = [attn_length, 2*attn_length, self.context_shape[0] - 1]
+            decoder_input = tf.gather(encoder_output, feat_indices)
+            decoder_input = tf.transpose(decoder_input, perm=[1,0,2])
+            #Output is of shape [batch_size, max_len, cell.output_size]
+            decoder_output, _ = tf.nn.dynamic_rnn(attention_wrapped_decoder, decoder_input, dtype=tf.float32)
+            #decoder_output = tf.transpose(decoder_output, perm=[1,0,2])
 
-        #Weights for image_encoding
-        self.image_encode_W = self.init_weight(dim_context, dim_hidden*4, name='image_encode_W')
+        
+        with tf.variable_scope("classifier"):
+            classifier_weights = tf.get_variable("proj_w", [self.lstm_cell_size, self.vocab_size], \
+                        initializer=tf.contrib.layers.xavier_initializer(), dtype=tf.float32)
+            #classifier_weights_t = tf.transpose(classifier_proj_weights)
+            classifier_weights = tf.reshape(classifier_weights, [1, self.lstm_cell_size, self.vocab_size])
+            classifier_weights = tf.tile(classifier_weights, [self.batch_size, 1, 1])
+            b = tf.get_variable("proj_b", [self.vocab_size])
+            b = tf.reshape(b, [1, 1, self.vocab_size])
+            b = tf.tile(b, [self.batch_size, self.maxlen, 1])
+        
+        logits = tf.add(tf.matmul(decoder_output, classifier_weights), b)
+        #print(tf.nn.softmax(logits))
+        #return tf.argmax(tf.nn.softmax(logits), axis=-1)
+        return tf.nn.softmax(logits)
 
-        #Initialize attention weights
-        self.image_att_W = self.init_weight(dim_context, dim_context, name='image_att_W')
-        self.hidden_att_W = self.init_weight(dim_hidden, dim_context, name='hidden_att_W')
-        self.pre_att_b = self.init_bias(dim_context, name='pre_att_b')
-
-        #I'm pretty sure this is the f_{att} model discussed in the paper
-        #(the attention model conditioned on h_{t-1}
-        self.att_W = self.init_weight(dim_context, 1, name='att_W')
-        self.att_b = self.init_bias(1, name='att_b')
-
-        #Initialize decoder weights
-        #Goes from LSTM hidden state to a "word" embedding code
-        self.decode_lstm_W = self.init_weight(dim_hidden, dim_embed, name='decode_lstm_W')
-        self.decode_lstm_b = self.init_bias(dim_embed, name='decode_lstm_b')
-
-        #Goes from the word embedding code to an output in the vocab_size space
-        #(i.e slap a softmax on it and the output is a probability for each word in the vocab being
-        #correct at that timestep)
-        self.decode_word_W = self.init_weight(dim_embed, vocab_size, name='decode_word_W')
-
-        if bias_init_vector is not None:
-            self.decode_word_b = tf.Variable(bias_init_vector.astype(np.float32), name='decode_word_b')
-        else:
-            self.decode_word_b = self.init_bias(vocab_size, name='decode_word_b')
-
-
-    def get_initial_lstm(self, mean_context):
-        #From the paper: "The initial memory state and hidden state of the LSTM are predicted by an average
-        #of the annotation vectors fed through two separate MLPs (init,c and init,h)"
-        #This is done via the mean_context ops
-        initial_hidden = tf.nn.tanh(tf.matmul(mean_context, self.init_hidden_W) + self.init_hidden_b)
-        initial_memory = tf.nn.tanh(tf.matmul(mean_context, self.init_memory_W) + self.init_memory_b)
-
-        return initial_hidden, initial_memory
-
-    def build_model(self):
-        #The context vector (\hat{z_t} in the paper) is a dynamic representation of a relevant part of an image 
-        #at time t
-        #Here however, the context has more dimensions. The batch_size is obvious, but the context shape refers
-        #to the number of annotations and the dimensionality of each annotation
-        #i.e self.context_shape[0] = #annotations (called L in the paper) and self.context_shape[1] = #dimensions
-        #(D in the paper) The paper describes this in section 3.1.1
-        context = tf.placeholder("float32", [self.batch_size, self.context_shape[0], self.context_shape[1]])
-        #The sentence represents the collection of words
-        sentence = tf.placeholder("int32", [self.batch_size, self.n_lstm_steps])
-        #The mask is
-        mask = tf.placeholder("float32", [self.batch_size, self.n_lstm_steps])
-
-        #From the paper: "The initial memory state and hidden state of the LSTM are predicted by an average
-        #of the annotation vectors fed through two separate MLPs (init,c and init,h)"
-        #This reduce mean call averages across the second dimension, i.e the L annotations 
-        h, c = self.get_initial_lstm(tf.reduce_mean(context, 1))#(batch_size, D)
-
-        #The flattened context
-        #The tf.reshape function takes context and reshapes it so that the total number of elements
-        #remains constant. This is done by the -1 argument. So the shape will be [(batch_size*L), D]
-        context_flat = tf.reshape(context, [-1, self.dim_context])
-        #Encode the context by multiplying by image attention weights
-        context_encode = tf.matmul(context_flat, self.image_att_W) # (batch_size*L, D)
-        context_encode = tf.reshape(context_encode, [-1, context_shape[0], context_shape[1]]) #(batch_size, L, D)
-
-        loss = 0.0
-
-        #The number of lstm_steps is how many outputs the LSTM will make
-        for ind in range(self.n_lstm_steps):
-
-            if ind == 0:
-                word_emb = tf.zeros([self.batch_size, self.dim_embed])
-            else:
-                tf.get_variable_scope().reuse_variables()
-                with tf.device("/cpu:0"):
-                    word_emb = tf.nn.embedding_lookup(self.Wemb, sentence[:,ind-1])
-
-            #This is the T_{D+m+n,n} affine transformation referred to in section 3.1.2
-            x_t = tf.matmul(word_emb, self.lstm_W) + self.lstm_b # (batch_size, hidden*4)
-
-            #Extract the "ind"th word from each entry in the batch and combine into one column vector
-            labels = tf.expand_dims(sentence[:,ind], 1)
-            #Indices is a column vector of numbers from 0 to 31 (batch_size - 1) inclusive
-            indices = tf.expand_dims(tf.range(0, self.batch_size, 1), 1)
-            concatenated = tf.concat(1, [indices, labels])# Shape: (batch_size, 2)
-            #Dense represenation of one_hot encoding
-            #For each i in [0, batch_size):
-            #onehot_labels[concatenated[i][0], concatenated[i][1]] = 1.0
-            #onehot_labels[indices[i], labels[i]] = 1.0 (all other values = 0.0)
-            #For example, the "ind"th word of the 0th example in the batch has a value x
-            #Then onehot_labels[0][x] = 1.0
-            #So for let's say that first sentence (i = 0) has values [x, y, z] and second has values [a, b, c] 
-            #vocab_size = 6 (a=0,b=1,c=2,x=3,y=4,z=5) and batch_size = 2
-            #Let's say we're on the first (ind = 0) column. So labels is the column_vector [[x],[a]]
-            #Then onehot_labels[0, x] = 1.0 and onehot_labels[1, a] = 1.0
-            onehot_labels = tf.sparse_to_dense( concatenated, tf.pack([self.batch_size, self.vocab_size]), 1.0, 0.0)#Shape: (batch_size, self.vocab_size)
-
-            context_encode = context_encode + \
-                 tf.expand_dims(tf.matmul(h, self.hidden_att_W), 1) + \
-                 self.pre_att_b
-
-            context_encode = tf.nn.tanh(context_encode)
-
-            #context_encode: 3D -> flat required
-            context_encode_flat = tf.reshape(context_encode, [-1, self.dim_context]) # (batch_size*L, D)
-            alpha = tf.matmul(context_encode_flat, self.att_W) + self.att_b # (batch_size*L, 1)
-            alpha = tf.reshape(alpha, [-1, self.context_shape[0]]) # (batch_size, L)
-            #Alpha now represents the relative importance to give to each of the L annotations for 
-            #generating the next word
-            #TODO: Change this such that the model is restricted to focusing on a smaller subset of alphas
-            # maybe impose a penalty for this alpha being too different from the last alpha?
-            # would also have to change how it initializes then too
-            alpha = tf.nn.softmax( alpha )
-
-            weighted_context = tf.reduce_sum(context * tf.expand_dims(alpha, 2), 1) #(batch_size, D)
-
-            lstm_preactive = tf.matmul(h, self.lstm_U) + x_t + tf.matmul(weighted_context, self.image_encode_W)
-            #LSTM Computations
-            #tf.split(
-            i, f, o, new_c = tf.split(1, 4, lstm_preactive)
-
-            i = tf.nn.sigmoid(i)
-            f = tf.nn.sigmoid(f)
-            o = tf.nn.sigmoid(o)
-            new_c = tf.nn.tanh(new_c)
-
-            c = f * c + i * new_c
-            h = o * tf.nn.tanh(new_c)
-
-            logits = tf.matmul(h, self.decode_lstm_W) + self.decode_lstm_b
-            logits = tf.nn.relu(logits)
-            logits = tf.nn.dropout(logits, 0.5)
-
-            #The loss calculated here is across the batch of words predicted at this particular timestep
-            #i.e for this column 
-            #TODO: Change this such that it's appropriate for a GAN
-            logit_words = tf.matmul(logits, self.decode_word_W) + self.decode_word_b
-            cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logit_words, onehot_labels)
-            cross_entropy = cross_entropy * mask[:,ind]
-
-            current_loss = tf.reduce_sum(cross_entropy)
-            loss = loss + current_loss
-
-        loss = loss / tf.reduce_sum(mask)
-        return loss, context, sentence, mask
-
-    def build_generator(self, maxlen):
-        context = tf.placeholder("float32", [1, self.context_shape[0], self.context_shape[1]])
-        h, c = self.get_initial_lstm(tf.reduce_mean(context, 1))
-
-        context_encode = tf.matmul(tf.squeeze(context), self.image_att_W)
-        generated_words = []
-        logit_list = []
-        alpha_list = []
-        word_emb = tf.zeros([1, self.dim_embed])
-        for ind in range(maxlen):
-            x_t = tf.matmul(word_emb, self.lstm_W) + self.lstm_b
-            context_encode = context_encode + tf.matmul(h, self.hidden_att_W) + self.pre_att_b
-            context_encode = tf.nn.tanh(context_encode)
-
-            alpha = tf.matmul(context_encode, self.att_W) + self.att_b
-            alpha = tf.reshape(alpha, [-1, self.context_shape[0]] )
-            alpha = tf.nn.softmax(alpha)
-
-            alpha = tf.reshape(alpha, (context_shape[0], -1))
-            alpha_list.append(alpha)
-
-            weighted_context = tf.reduce_sum(tf.squeeze(context) * alpha, 0)
-            weighted_context = tf.expand_dims(weighted_context, 0)
-
-            lstm_preactive = tf.matmul(h, self.lstm_U) + x_t + tf.matmul(weighted_context, self.image_encode_W)
-
-            i, f, o, new_c = tf.split(1, 4, lstm_preactive)
-
-            i = tf.nn.sigmoid(i)
-            f = tf.nn.sigmoid(f)
-            o = tf.nn.sigmoid(o)
-            new_c = tf.nn.tanh(new_c)
-
-            c = f*c + i*new_c
-            h = o*tf.nn.tanh(new_c)
-
-            logits = tf.matmul(h, self.decode_lstm_W) + self.decode_lstm_b
-            logits = tf.nn.relu(logits)
-
-            logit_words = tf.matmul(logits, self.decode_word_W) + self.decode_word_b
-
-            max_prob_word = tf.argmax(logit_words, 1)
-
-            with tf.device("/cpu:0"):
-                word_emb = tf.nn.embedding_lookup(self.Wemb, max_prob_word)
-
-            generated_words.append(max_prob_word)
-            logit_list.append(logit_words)
-
-        return context, generated_words, logit_list, alpha_list
-
-
-#TODO Refactor below this line so that functions are placed in more appropriate files
-
-def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed this function from NeuralTalk
-    print 'preprocessing word counts and creating vocab based on word count threshold %d' % (word_count_threshold, )
-    word_counts = {}
-    nsents = 0
-    for sent in sentence_iterator:
-      nsents += 1
-      for w in sent.lower().split(' '):
-        word_counts[w] = word_counts.get(w, 0) + 1
-    vocab = [w for w in word_counts if word_counts[w] >= word_count_threshold]
-    print 'filtered words from %d to %d' % (len(word_counts), len(vocab))
-
-    ixtoword = {}
-    ixtoword[0] = '.'  # period at the end of the sentence. make first dimension be end token
-    wordtoix = {}
-    wordtoix['#START#'] = 0 # make first vector be the start token
-    ix = 1
-    for w in vocab:
-      wordtoix[w] = ix
-      ixtoword[ix] = w
-      ix += 1
-
-    word_counts['.'] = nsents
-    bias_init_vector = np.array([1.0*word_counts[ixtoword[i]] for i in ixtoword])
-    bias_init_vector /= np.sum(bias_init_vector) # normalize to frequencies
-    bias_init_vector = np.log(bias_init_vector)
-    bias_init_vector -= np.max(bias_init_vector) # shift to nice numeric range
-    return wordtoix, ixtoword, bias_init_vector
+if __name__ == "__main__":
+    g = Generator(10000)
+    softmax = g.build_generator()
+    print softmax.get_shape()

@@ -54,7 +54,7 @@ def buildVocab(sg_dict):
             vocab = json.load(f)
         return vocab
     vocab = {}
-    vocab[u"is"] = 0
+    vocab[u"be.v.01"] = 0
     """with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
         sg_dict = {sg['image_id']:sg for sg in json.load(f)}"""
 
@@ -62,31 +62,22 @@ def buildVocab(sg_dict):
         for o in sg_dict[i]["objects"]:
             if "synsets" in o:
                 if len(o["synsets"]) > 0:
-                    wordnet_synset = o["synsets"][0]
+                    wordnet_synset = o["synsets"][0].lower().strip()
                     if not wordnet_synset in vocab:
                         vocab[wordnet_synset] = len(vocab)
-                elif "names" in o:
-                    name = o["names"][0]
-                    if not name in vocab:
-                        vocab[name] = len(vocab)
-            elif "names" in o:
-                name = o["names"][0]
-                if not name in vocab:
-                    vocab[name] = len(vocab)
+
             if "attributes" in o:
                 for attribute in o["attributes"]:
-                    if not attribute in vocab:
-                        vocab[attribute] = len(vocab)
+                    if not attribute.lower().strip() in vocab and len(attribute.split()) == 1:
+                        vocab[attribute.lower().strip()] = len(vocab)
         for r in sg_dict[i]["relationships"]:
+            predicate = ""
             if "synsets" in r:
                 if len(r["synsets"]) > 0:
-                    predicate = r["synsets"][0]
-                else:
-                    predicate = r["predicate"]
-            else:
-                predicate = r["predicate"]
-            if not predicate in vocab:
-                vocab[predicate] = len(vocab)
+                    predicate = r["synsets"][0].lower().strip()
+            if len(predicate) > 0:
+                if not predicate in vocab:
+                    vocab[predicate] = len(vocab)
             #The subject and object should both already be added
             #via the objects loop above
 
@@ -101,26 +92,26 @@ def parseSceneGraph(sg):
     relationships = []
     ob_id_dict = {}
     for o in sg["objects"]:
+        name = ""
         if "synsets" in o:
             if len(o["synsets"]) > 0:
-                name = o["synsets"][0]
-            elif "names" in o:
-                name = o["names"][0]
-        elif "names" in o:
-            name = o["names"][0]
+                name = o["synsets"][0].lower().strip()
+        if len(name) == 0:
+            continue
         ob_id_dict[o["object_id"]] = name
         if "attributes" in o:
             for attribute in o["attributes"]:
-                attributes.append((name, u"is", attribute))
+                if len(attribute.split()) == 1:
+                    attributes.append((name, u"be.v.01", attribute.lower().strip()))
     for r in sg["relationships"]:
+        predicate = ""
         if "synsets" in r:
             if len(r["synsets"]) > 0:
-                predicate = r["synsets"][0]
-            else:
-                predicate = r["predicate"]
-        else:
-            predicate = r["predicate"]
-        relationships.append((ob_id_dict[r["subject_id"]], predicate, ob_id_dict[r["object_id"]]))
+                predicate = r["synsets"][0].lower().strip()
+        if len(predicate) == 0:
+            continue
+        if r["subject_id"] in ob_id_dict and r["object_id"] in ob_id_dict:
+            relationships.append((ob_id_dict[r["subject_id"]], predicate, ob_id_dict[r["object_id"]]))
     return attributes, relationships
 
 def encodeTriple(vocab, subject, predicate, object):
@@ -238,6 +229,59 @@ def checkGrayscale(im_path):
 def enoughElements(sg_dict, im_id):
     attributes, relations = parseSceneGraph(sg_dict[im_id])
     return (len(attributes) + len(relations)) >= 10
+
+def toNPZ(path_to_data, vgg_tf_model):
+    path_to_data += "/" if path_to_data[-1] != "/" else ""
+    path_to_images = path_to_data + "all_images/"
+    print "Computing Image Mean"
+    r_mean, g_mean, b_mean = computeImageMean(path_to_images)
+    image_means = [r_mean, g_mean, b_mean]
+    print "Done"
+
+    print "Creating list of files which have a scene graph,\
+         excluding grayscale and images with less than 10 combined relations and attributes"
+    with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
+        sg_dict = {sg['image_id']:sg for sg in json.load(f)}
+
+    #Has to be a dict rather than a list because certain im_ids might not have associated scene graphs
+    #If a list were used it could results in list index out of range errors
+    #We're filtering out grayscale images
+    image_files = {im_id:"{}{}.jpg".format(path_to_images, im_id) \
+            for im_id in sorted(sg_dict) if not checkGrayscale("{}{}.jpg".format(path_to_images, im_id))}
+    #Also filter out those files which don't have at least ten combined relationships and attributes
+    bad = []
+    for im_id in image_files:
+        if not enoughElements(sg_dict, im_id):
+            bad.append(im_id)
+    image_files = {im_id:image_files[im_id] for im_id in image_files if im_id not in bad}
+    print "Done"
+
+    print "Reading in tensorflow model"
+    tf_graph = readInTensorflowModel(vgg_tf_model)
+    print "Done"
+    print "Building vocabulary"
+    vocab = buildVocab(sg_dict)
+    print "Done"
+
+    print "Creating image generator"
+    #Note that any batch significantly larger than 128 might cause a GPU OOM
+    #e.g on a 12GB Titan X a batch size of 256 was too big
+    batch_size = 128
+    im_generator = imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = batch_size)
+    print "Done"
+    count = 0
+    path_to_data += "/" if path_to_data[-1] != "/" else ""
+    for image_feats, id_batch, att_rels_batch in im_generator:
+        path_to_batch_file = "{}batches/batch_{}.npz".format(path_to_data, count)
+        count += 1
+        feat_list = [i for i in image_feats]
+        cap_list = [np.array(i) for i in att_rels_batch]
+        save_list = [None]*(len(feat_list)+len(cap_list))
+        save_list[::2] = feat_list
+        save_list[1::2] = cap_list
+        np.savez(path_to_batch_file, save_list)
+
+    
     
 
 #Inspired by https://github.com/tensorflow/models/blob/master/im2txt/im2txt/data/build_mscoco_data.py
@@ -337,4 +381,4 @@ def toTFRecord(path_to_data, vgg_tf_model):
 if __name__ == "__main__":
     vgg_tf_model = "/home/user/misc_github_projects/Scene-Graph-GAN/models/vgg/vgg16.tfmodel"
     path_to_data = "/home/user/data/visual_genome/"
-    toTFRecord(path_to_data, vgg_tf_model)
+    toNPZ(path_to_data, vgg_tf_model)

@@ -1,5 +1,8 @@
 data/*
 models/*
+logs/*
 tensorflow_venv/
 tensorflow_venv/*
 preprocessing/vocab.json
+*.swp
+*.pyc
