@@ -1,0 +1,14 @@
+<h3>Dataset Creation</h3>
+Code in this directory allows you to download and arrange Visual Genome v 1.2 on your machine.
+
+<h3>Requirements:</h3>
+<a href="http://docs.python-requests.org/en/master/">Requests</a> (can be installed via pip install requests)
+
+<h3>Config File</h3>
+The config file in the main directory will be used to determine where the data will be saved once downloaded. Please edit the "visual_genome" config variable to point to the directory in which you'd like your data saved. If this directory does not exist the scripts will attempt to create it for you.
+
+<h3>Grab Data</h3>
+Running <code><pre>python grab_data.py</pre></code> will attempt to download the Visual Genome data to the 
+
+<h3>Arrange Data</h3>
+Running <code><pre>python arrange_data.py</pre></code> will move all images into a single folder called "all_images" that exists within the visual genome directory. Then, attribute information is added to the scene graphs, as it is not included by default. Once this step has been run, the code in the preprocessing directory can be used.

@@ -379,6 +379,16 @@ def toTFRecord(path_to_data, vgg_tf_model):
 
 
 if __name__ == "__main__":
-    vgg_tf_model = "/home/user/misc_github_projects/Scene-Graph-GAN/models/vgg/vgg16.tfmodel"
-    path_to_data = "/home/user/data/visual_genome/"
+    with open("../config.txt", "r") as f:
+        for line in f:
+            line_ = line.split()
+            if line_[0] == "visual_genome":
+                path_to_data = line_[1]
+            elif line_[0] == "vgg_tf_model":
+                vgg_tf_model = line_[1]
+
+    path_to_data += "/" if path_to_data[-1] != "/" else ""
+
+    #vgg_tf_model = "/home/user/misc_github_projects/Scene-Graph-GAN/models/vgg/vgg16.tfmodel"
+    #path_to_data = "/home/user/data/visual_genome/"
     toNPZ(path_to_data, vgg_tf_model)

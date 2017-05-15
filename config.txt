@@ -1,0 +1,2 @@
+visual_genome "../data/"
+vgg_tf_model = "../models/vgg/vgg16.tfmodel"
