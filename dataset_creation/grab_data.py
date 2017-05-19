@@ -1,4 +1,5 @@
 import requests
+import os
 
 def streamSaveLink(link, filename):
     r = requests.get(link, stream = True)
@@ -18,7 +19,7 @@ def getVisualGenome(save_path):
     
 #TODO Make available via a google drive link or something
 def getVGGModel(save_path):
-    link = ""
+    link = "https://s3.amazonaws.com/cadl/models/vgg16.tfmodel"
     r = requests.get(link, stream = True)
     #filename = "{}{}".format(save_path, link.split("/")[-1])
     filename = save_path

@@ -1,9 +1,33 @@
 from subprocess import call
+import os
 
 def unzipAll(save_path):
     for f in os.listdir(save_path):
         if f[-4:] == ".zip":
             call(["unzip", f])
+
+def addAttributes(save_path):
+    attr_data = json.load(open(os.path.join(save_path, 'attributes.json')))
+    with open(os.path.join(dataDir, 'scene_graphs.json')) as f:
+        sg_dict = {sg['image_id']:sg for sg in json.load(f)}
+
+    id_count = 0
+    for img_attrs in attr_data:
+        attrs = []
+        for attribute in img_attrs['attributes']:
+            a = img_attrs.copy(); del a['attributes']
+            a['attribute']    = attribute
+            a['attribute_id'] = id_count
+            attrs.append(a)
+        id_count += 1
+        iid = img_attrs['image_id']
+        sg_dict[iid]['attributes'] = attrs
+
+    with open(os.path.join(save_path, 'scene_graphs.json'), 'w') as f:
+        json.dump(sg_dict.values(), f)
+    del attr_data, sg_dict
+    gc.collect()
+
 
 if __name__ == "__main__":
     #Read in path to the data
@@ -23,3 +47,4 @@ if __name__ == "__main__":
     call(["mv", "{}images/*".format(path_to_data), all_images])
     call(["mv", "{}images2/*".format(path_to_data), all_images])
     #Add attributes to scene graphs
+    addAttributes(path_to_data)

@@ -2,4 +2,4 @@
 
 Requirements: Tensorflow
 
-Tensorflow VGG-16 obtained from : https://github.com/ry/tensorflow-vgg16
+Tensorflow VGG-16 obtained from : https://s3.amazonaws.com/cadl/models/vgg16.tfmodel

@@ -2,7 +2,7 @@ import local as vg
 import tensorflow as tf
 import numpy as np
 import os
-import Image
+import PIL.Image as Image
 import json
 from scipy.ndimage import filters
 from scipy.misc import imresize
@@ -48,13 +48,17 @@ def computeImageMean(image_dir):
 
     return r_mean, g_mean, b_mean
 
+#When the vocab is built, the first entry is the index and the second entry is
+#a count indicating how many times that word appears in the vocabulary
 def buildVocab(sg_dict):
     if os.path.exists("./vocab.json"):
         with open("./vocab.json", "r") as f:
             vocab = json.load(f)
         return vocab
     vocab = {}
-    vocab[u"be.v.01"] = 0
+    #The 150 is me randomly picking a number I think will be bigger than any threshold I use
+    #to reduce vocabulary size, guaranteeing that "be.v.01" is still in the vocabulary
+    vocab[u"be.v.01"] = [0, 150]
     """with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
         sg_dict = {sg['image_id']:sg for sg in json.load(f)}"""
 
@@ -64,12 +68,22 @@ def buildVocab(sg_dict):
                 if len(o["synsets"]) > 0:
                     wordnet_synset = o["synsets"][0].lower().strip()
                     if not wordnet_synset in vocab:
-                        vocab[wordnet_synset] = len(vocab)
+                        vocab[wordnet_synset] = [0,0]
+                        vocab[wordnet_synset][0] = len(vocab)
+                        vocab[wordnet_synset][1] = 1
+                    else:
+                        vocab[wordnet_synset][1] += 1
 
             if "attributes" in o:
                 for attribute in o["attributes"]:
-                    if not attribute.lower().strip() in vocab and len(attribute.split()) == 1:
-                        vocab[attribute.lower().strip()] = len(vocab)
+                    if len(attribute.split()) == 1:
+                        if not attribute.lower().strip() in vocab:
+                            vocab[attribute.lower().strip()] = [0,0]
+                            vocab[attribute.lower().strip()][0] = len(vocab)
+                            vocab[attribute.lower().strip()][1] = 1
+                        else:
+                            vocab[attribute.lower().strip()][1] += 1
+
         for r in sg_dict[i]["relationships"]:
             predicate = ""
             if "synsets" in r:
@@ -77,7 +91,9 @@ def buildVocab(sg_dict):
                     predicate = r["synsets"][0].lower().strip()
             if len(predicate) > 0:
                 if not predicate in vocab:
-                    vocab[predicate] = len(vocab)
+                    vocab[predicate] = [0,0]
+                    vocab[predicate][0] = len(vocab)
+                    vocab[predicate][1] += 1
             #The subject and object should both already be added
             #via the objects loop above
 
@@ -86,8 +102,21 @@ def buildVocab(sg_dict):
 
     return vocab
 
+def pruneVocab(vocab, threshold=10):
+    for k,v  in vocab.items():
+        if v[1] < threshold:
+            del vocab[k]
+    with open("./vocab.json", "w") as f:
+        json.dump(vocab, f)
+
+def reIndexVocab(vocab):
+    i = 1
+    for item in vocab:
+        vocab[item][0] = i
+        i += 1
+
 #For a single scene graph, return the attribute and relationship triples
-def parseSceneGraph(sg):
+def parseSceneGraph(sg, vocab, count_threshold=10):
     attributes = []
     relationships = []
     ob_id_dict = {}
@@ -96,19 +125,19 @@ def parseSceneGraph(sg):
         if "synsets" in o:
             if len(o["synsets"]) > 0:
                 name = o["synsets"][0].lower().strip()
-        if len(name) == 0:
+        if len(name) == 0 or name not in vocab:
             continue
         ob_id_dict[o["object_id"]] = name
         if "attributes" in o:
             for attribute in o["attributes"]:
-                if len(attribute.split()) == 1:
+                if len(attribute.split()) == 1 and attribute in vocab:
                     attributes.append((name, u"be.v.01", attribute.lower().strip()))
     for r in sg["relationships"]:
         predicate = ""
         if "synsets" in r:
             if len(r["synsets"]) > 0:
                 predicate = r["synsets"][0].lower().strip()
-        if len(predicate) == 0:
+        if len(predicate) == 0 or predicate not in vocab:
             continue
         if r["subject_id"] in ob_id_dict and r["object_id"] in ob_id_dict:
             relationships.append((ob_id_dict[r["subject_id"]], predicate, ob_id_dict[r["object_id"]]))
@@ -179,7 +208,7 @@ def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means
             #Skip grayscale images
             #if im.shape != (224, 224, 3):
             #    continue
-            attributes, relations = parseSceneGraph(sg_dict[im_id])
+            attributes, relations = parseSceneGraph(sg_dict[im_id], vocab)
             #Shouldn't have to do this anymore, since we're filtering out images
             #that don't have enough information attached to them, all in the name
             #of predictable batch sizes
@@ -197,7 +226,9 @@ def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means
             init = tf.global_variables_initializer()
             sess.run(init)
             feed_dict = { im_placeholder:np.array(images, dtype=np.float32) }
-            feat_tensor = graph.get_tensor_by_name("import/conv5_3/Relu:0")
+            """for f in [n.name for n in tf.get_default_graph().as_graph_def().node]:
+                print f"""
+            feat_tensor = graph.get_tensor_by_name("import/conv5_3/conv5_3:0")
             feats = sess.run(feat_tensor, feed_dict = feed_dict)
         feats = np.reshape(feats, (feats.shape[0], -1, feats.shape[3]))
         #feats = np.array(feats, dtype=np.float32)
@@ -205,29 +236,14 @@ def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means
         #Except for when the generator runs out of files
         yield feats, ids, attributes_relationships
 
-def _int64_feature(value):
-    return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
-
-def _bytes_feature(value):
-    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(value)]))
-
-def _int64_feature_list(values):
-    return tf.train.FeatureList(feature=[_int64_feature(v) for v in values])
-
-def _int64_nested_feature_list(values):
-    return tf.train.FeatureList(feature=[tf.train.Feature(int64_list=tf.train.Int64List(value=v)) for v in values])
-
-def _bytes_feature_list(values):
-    return tf.train.FeatureList(feature=[_bytes_feature(v) for v in values])
-
 def checkGrayscale(im_path):
     im = Image.open(im_path)
     im.load()
     im = np.array(im)
     return len(im.shape) == 2
 
-def enoughElements(sg_dict, im_id):
-    attributes, relations = parseSceneGraph(sg_dict[im_id])
+def enoughElements(sg_dict, im_id, vocab):
+    attributes, relations = parseSceneGraph(sg_dict[im_id], vocab)
     return (len(attributes) + len(relations)) >= 10
 
 def toNPZ(path_to_data, vgg_tf_model):
@@ -242,6 +258,19 @@ def toNPZ(path_to_data, vgg_tf_model):
          excluding grayscale and images with less than 10 combined relations and attributes"
     with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
         sg_dict = {sg['image_id']:sg for sg in json.load(f)}
+    #TODO: Save this sg_dict?
+
+    print "Building vocabulary"
+    vocab = buildVocab(sg_dict)
+    print "Done"
+
+    print "Pruning vocabulary"
+    pruneVocab(vocab)
+    reIndexVocab(vocab)
+    print "Done"
+
+    print "Size of vocabulary after pruning"
+    print len(vocab)
 
     #Has to be a dict rather than a list because certain im_ids might not have associated scene graphs
     #If a list were used it could results in list index out of range errors
@@ -251,16 +280,13 @@ def toNPZ(path_to_data, vgg_tf_model):
     #Also filter out those files which don't have at least ten combined relationships and attributes
     bad = []
     for im_id in image_files:
-        if not enoughElements(sg_dict, im_id):
+        if not enoughElements(sg_dict, im_id, vocab):
             bad.append(im_id)
     image_files = {im_id:image_files[im_id] for im_id in image_files if im_id not in bad}
     print "Done"
 
     print "Reading in tensorflow model"
     tf_graph = readInTensorflowModel(vgg_tf_model)
-    print "Done"
-    print "Building vocabulary"
-    vocab = buildVocab(sg_dict)
     print "Done"
 
     print "Creating image generator"
@@ -280,102 +306,6 @@ def toNPZ(path_to_data, vgg_tf_model):
         save_list[::2] = feat_list
         save_list[1::2] = cap_list
         np.savez(path_to_batch_file, save_list)
-
-    
-    
-
-#Inspired by https://github.com/tensorflow/models/blob/master/im2txt/im2txt/data/build_mscoco_data.py
-def toTFRecord(path_to_data, vgg_tf_model):
-    path_to_data += "/" if path_to_data[-1] != "/" else ""
-    path_to_images = path_to_data + "all_images/"
-    print "Computing Image Mean"
-    r_mean, g_mean, b_mean = computeImageMean(path_to_images)
-    image_means = [r_mean, g_mean, b_mean]
-    print "Done"
-
-    print "Creating list of files which have a scene graph,\
-         excluding grayscale and images with less than 10 combined relations and attributes"
-    with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
-        sg_dict = {sg['image_id']:sg for sg in json.load(f)}
-
-    #Has to be a dict rather than a list because certain im_ids might not have associated scene graphs
-    #If a list were used it could results in list index out of range errors
-    #We're filtering out grayscale images
-    image_files = {im_id:"{}{}.jpg".format(path_to_images, im_id) \
-            for im_id in sorted(sg_dict) if not checkGrayscale("{}{}.jpg".format(path_to_images, im_id))}
-    #Also filter out those files which don't have at least ten combined relationships and attributes
-    bad = []
-    for im_id in image_files:
-        if not enoughElements(sg_dict, im_id):
-            bad.append(im_id)
-    image_files = {im_id:image_files[im_id] for im_id in image_files if im_id not in bad}
-    print "Done"
-
-    print "Reading in tensorflow model"
-    tf_graph = readInTensorflowModel(vgg_tf_model)
-    print "Done"
-    print "Building vocabulary"
-    vocab = buildVocab(sg_dict)
-    print "Done"
-
-    print "Creating image generator"
-    #Note that any batch significantly larger than 128 might cause a GPU OOM
-    #e.g on a 12GB Titan X a batch size of 256 was too big
-    batch_size = 128
-    im_generator = imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = batch_size)
-    print "Done"
-    count = 0
-    path_to_data += "/" if path_to_data[-1] != "/" else ""
-    for image_feats, id_batch, att_rels_batch in im_generator:
-        path_to_tf_records = "{}tf_records/batch_{}.tfrecords".format(path_to_data, count)
-        count += 1
-        writer = tf.python_io.TFRecordWriter(path_to_tf_records)
-        #This should happen at most once, when the generator runs out of files
-        if len(id_batch) != batch_size:
-            print "Not a regular sized batch!"
-        for i in xrange(len(id_batch)):
-            im_raw = image_feats[i].tostring()
-            num_feats = image_feats[i].shape[0] 
-            feat_dim = image_feats[i].shape[1]
-            #TODO: Rather than truncating to 10 you could pad up to the max
-            #And then during training ignore the padding triples
-            #Recall that att_rels_batch is a list (chunk_size (or less) elements long)
-            #Where each element is a list corresponding to a particular image. Each element
-            #contains tuples which correspond to triples, a subject predicate and object
-            #describing objects in the image. Of course these tuples are indices into the vocab
-            #So att_rels_batch[i][j] is a tuple of ints
-            ten = []
-            for j in np.random.choice([q for q in xrange(len(att_rels_batch[i]))], size=10, replace=False):
-                #print att_rels_batch[i][j]
-                ten.append(att_rels_batch[i][j])
-            #Construct the Example proto object
-            context = tf.train.Features(feature={
-                "image/image_id": _int64_feature(id_batch[i]),
-                "image/data": _bytes_feature(im_raw),
-            })
-            feature_lists = tf.train.FeatureLists(feature_list={
-                "image/triples": _int64_nested_feature_list(ten),
-            })
-            sequence_example = tf.train.SequenceExample(
-                context=context, feature_lists=feature_lists)
-            """example = tf.train.Example(
-                features=tf.train.Features(
-                    feature={
-                        'atts_and_rels': tf.train.Feature(
-                            int64_list=tf.train.Int64List(value=att_rels_batch[i])),
-                        'image': tf.train.Feature(
-                            bytes_list = tf.train.BytesList(value=im_raw)),
-                        'im_id': tf.train.Feature(
-                            int64_list=tf.train.Int64List(value=[id_batch[i]])),
-                        'num_feats': tf.train.Feature(
-                            int64_list=tf.train.Int64List(value=[num_feats])),
-                        'feat_dim': tf.train.Feature(
-                            int64_list=tf.train.Int64List(value=[feat_dim]))
-            }))"""
-            serialized = sequence_example.SerializeToString()
-            writer.write(serialized)
-        writer.close()
-    return
 
 
 if __name__ == "__main__":
