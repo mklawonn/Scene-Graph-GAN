@@ -4,5 +4,6 @@ logs/*
 tensorflow_venv/
 tensorflow_venv/*
 preprocessing/vocab.json
+config.txt
 *.swp
 *.pyc

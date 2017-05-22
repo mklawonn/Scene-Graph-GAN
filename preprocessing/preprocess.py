@@ -114,6 +114,8 @@ def reIndexVocab(vocab):
     for item in vocab:
         vocab[item][0] = i
         i += 1
+    with open("./vocab.json", "w") as f:
+        json.dump(vocab, f)
 
 #For a single scene graph, return the attribute and relationship triples
 def parseSceneGraph(sg, vocab, count_threshold=10):

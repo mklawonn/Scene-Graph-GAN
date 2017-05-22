@@ -27,6 +27,7 @@ class WGAN(object):
         with open(path_to_vocab_json, "r") as f:
             self.vocab = json.load(f)
         self.vocab_size = len(self.vocab)
+        print(self.vocab_size)
         self.decode = {y[0]:x for x,y in self.vocab.iteritems()}
 
         #Placeholders
