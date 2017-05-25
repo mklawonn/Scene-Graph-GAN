@@ -1,6 +1,7 @@
 data/*
 models/*
 logs/*
+samples/*
 tensorflow_venv/
 tensorflow_venv/*
 preprocessing/vocab.json

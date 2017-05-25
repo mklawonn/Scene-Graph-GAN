@@ -8,7 +8,6 @@ import random
 import numpy as np
 import tensorflow as tf
 
-import language_helpers
 import tflib as lib
 import tflib.ops.linear
 import tflib.ops.conv1d

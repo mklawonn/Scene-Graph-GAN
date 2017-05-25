@@ -96,6 +96,8 @@ def buildVocab(sg_dict):
                     vocab[predicate] = [0,0]
                     vocab[predicate][0] = len(vocab)
                     vocab[predicate][1] += 1
+                else:
+                    vocab[predicate][1] += 1
             #The subject and object should both already be added
             #via the objects loop above
 
