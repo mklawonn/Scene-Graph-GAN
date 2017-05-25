@@ -1,4 +1,4 @@
-visual_genome /home/user/data/visual_genome/
+visual_genome /mount/klawonnm/visual_genome/
 vgg_tf_model ../models/vgg/vgg16.tfmodel
 logs ./logs/
 vocab ./preprocessing/vocab.json

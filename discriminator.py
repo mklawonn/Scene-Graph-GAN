@@ -27,6 +27,7 @@ class Discriminator(object):
         self.image_feat_dim = context_shape[1]
         self.sequence_length = self.sequence_input_shape[1]
         self.batch_size = batch_size
+        tf.set_random_seed(42)
 
 
     def build_discriminator(self, context_input, sequence_input):
@@ -60,8 +61,13 @@ class Discriminator(object):
             triple_embedder = tf.contrib.rnn.LSTMCell(lstm_cell_size, use_peepholes=True)
             initializer = tf.random_uniform_initializer(-0.08, 0.08)
 
-            #Output is of shape [batch_size, max_time, cell.output_size]
+            #Output is of shape [seq_length, batch_size, cell.output_size]
             output, _ = tf.nn.dynamic_rnn(triple_embedder, Q_t, dtype=tf.float32, swap_memory=True)
+            #Q_t_unstacked = tf.unstack(Q_t, self.sequence_length, 1)
+            #output, _ = tf.contrib.rnn.static_rnn(triple_embedder, Q_t_unstacked, dtype=tf.float32)
+            #Output is now of shape batch_size, seq_length, cell.output_size
+            #output = tf.transpose(output, perm=[1,0,2])
+            #print output
 
             #Affinity weights for equation_3, but applied to triple_embedder LSTM outputs instead
             W_b_lstm = tf.get_variable("w_b_lstm", [lstm_cell_size, self.image_feat_dim], initializer=initializer)
@@ -191,12 +197,18 @@ class Discriminator(object):
 
 
 if __name__ == "__main__":
-    vocab_size = 30000
+    vocab_size = 7621
     batch_size = 32
     d = Discriminator(vocab_size, batch_size = batch_size)
-    context_input = tf.get_variable("input_features", [batch_size, 196, 512])
-    sequence_input = tf.get_variable("sequence_input", [batch_size, 3, vocab_size])
+    #context_input = tf.get_variable("input_features", [batch_size, 196, 512])
+    #sequence_input = tf.get_variable("sequence_input", [batch_size, 3, vocab_size])
+
+    #context_input = np.zeros((batch_size, 196, 512), dtype=np.float32)
+    #sequence_input = np.zeros((batch_size, 3, vocab_size), dtype=np.float32)
+    context_input = np.load("ims.npy")
+    sequence_input = np.load("triples.npy")
     logits = d.build_discriminator(context_input, sequence_input)
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
+        #print sess.run(output)
         print sess.run(logits)

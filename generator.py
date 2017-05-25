@@ -141,6 +141,7 @@ class Generator(object):
             # would also have to change how it initializes then too
             alpha = tf.nn.softmax( alpha )
 
+            #This is the Phi function for soft attention as explained in section 4.2
             weighted_context = tf.reduce_sum(context * tf.expand_dims(alpha, 2), 1) #(batch_size, D)
 
             lstm_preactive = tf.matmul(h, self.lstm_U) + x_t + tf.matmul(weighted_context, self.image_encode_W)

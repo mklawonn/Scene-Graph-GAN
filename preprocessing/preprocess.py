@@ -56,6 +56,8 @@ def buildVocab(sg_dict):
             vocab = json.load(f)
         return vocab
     vocab = {}
+    #For a given key in the vocab, their is a corresponding list. The first element is the "index" of that key, i.e the integer representation
+    #of that word, while the second element is the count of that word, or the number of times it appears in the training data
     #The 150 is me randomly picking a number I think will be bigger than any threshold I use
     #to reduce vocabulary size, guaranteeing that "be.v.01" is still in the vocabulary
     vocab[u"be.v.01"] = [0, 150]
@@ -110,7 +112,7 @@ def pruneVocab(vocab, threshold=10):
         json.dump(vocab, f)
 
 def reIndexVocab(vocab):
-    i = 1
+    i = 0
     for item in vocab:
         vocab[item][0] = i
         i += 1
@@ -148,9 +150,9 @@ def parseSceneGraph(sg, vocab, count_threshold=10):
 def encodeTriple(vocab, subject, predicate, object):
     #This is a dense representation of the sequence 
     dense = [0,0,0]
-    dense[0] = vocab[subject]
-    dense[1] = vocab[predicate]
-    dense[2] = vocab[object]
+    dense[0] = vocab[subject][0]
+    dense[1] = vocab[predicate][0]
+    dense[2] = vocab[object][0]
     return dense
 
 def grouper(iterable, n, fillvalue=None):
