@@ -96,8 +96,6 @@ class Generator(object):
         #of the annotation vectors fed through two separate MLPs (init,c and init,h)"
         #This reduce mean call averages across the second dimension, i.e the L annotations 
 
-        context = tf.nn.dropout(context, keep_prob = 0.9)
-
         h, c = self.get_initial_lstm(tf.reduce_mean(context, 1))#(batch_size, D)
 
         #The flattened context
@@ -137,11 +135,12 @@ class Generator(object):
             #Alpha now represents the relative importance to give to each of the L annotations for 
             #generating the next word
             #TODO: Alter how the alphas are computed rather than dropping context?
-            # maybe impose a penalty for this alpha being too different from the last alpha?
+            # maybe impose a penalty for this alpha being too similar to the last alpha?
             # would also have to change how it initializes then too
             alpha = tf.nn.softmax( alpha )
 
             #This is the Phi function for soft attention as explained in section 4.2
+            #Thus weighted context is equal to \hat{z}
             weighted_context = tf.reduce_sum(context * tf.expand_dims(alpha, 2), 1) #(batch_size, D)
 
             lstm_preactive = tf.matmul(h, self.lstm_U) + x_t + tf.matmul(weighted_context, self.image_encode_W)
