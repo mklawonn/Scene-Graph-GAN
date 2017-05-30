@@ -8,11 +8,11 @@ import tensorflow as tf
 import numpy as np
 
 class Generator(object):
-    def init_weight(self, dim_in, dim_out, name=None, stddev=1.0):
+    """def init_weight(self, dim_in, dim_out, name=None, stddev=1.0):
         return tf.Variable(tf.truncated_normal([dim_in, dim_out], stddev=stddev/np.sqrt(float(dim_in))), name=name)
 
     def init_bias(self, dim_out, name=None):
-        return tf.Variable(tf.zeros([dim_out]), name=name)
+        return tf.Variable(tf.zeros([dim_out]), name=name)"""
 
     def __init__(self, vocab_size, dim_embed=512, dim_context=512, dim_hidden=512, n_lstm_steps=3, batch_size=64, context_shape=[196,512], bias_init_vector=None):
         self.vocab_size = vocab_size
@@ -24,50 +24,48 @@ class Generator(object):
         self.batch_size = batch_size
         self.maxlen = n_lstm_steps
 
+        xavier_initializer = tf.contrib.layers.xavier_initializer()
+        constant_initializer = tf.constant_initializer(0.0)
         #Initialize the word embeddings
         with tf.device("/cpu:0"):
-            self.Wemb = tf.Variable(tf.random_uniform([vocab_size, dim_embed], -1.0, 1.0), name='Wemb')
+            self.Wemb = tf.get_variable("Wemb", [vocab_size, dim_embed], initializer=xavier_initializer)
 
         #Initial hidden state of LSTM
-        self.init_hidden_W = self.init_weight(dim_context, dim_hidden, name='init_hidden_W')
-        self.init_hidden_b = self.init_bias(dim_hidden, name='init_hidden_b')
+        self.init_hidden_W = tf.get_variable("init_hidden_W", [dim_context, dim_hidden], initializer=xavier_initializer)
+        self.init_hidden_b = tf.get_variable("init_hidden_b", [dim_hidden], initializer=constant_initializer)
 
         #Initial memory of LSTM
-        self.init_memory_W = self.init_weight(dim_context, dim_hidden, name='init_memory_W')
-        self.init_memory_b = self.init_bias(dim_hidden, name='init_memory_b')
+        self.init_memory_W = tf.get_variable("init_memory_W", [dim_context, dim_hidden], initializer=xavier_initializer)
+        self.init_memory_b = tf.get_variable("init_memory_b", [dim_hidden], initializer=constant_initializer)
 
         #Initialize LSTM Weights
-        self.lstm_W = self.init_weight(dim_embed, dim_hidden*4, name='lstm_W')
-        self.lstm_U = self.init_weight(dim_hidden, dim_hidden*4, name='lstm_U')
-        self.lstm_b = self.init_bias(dim_hidden*4, name='lstm_b')
+        self.lstm_W = tf.get_variable("lstm_W", [dim_embed, dim_hidden*4], initializer=xavier_initializer)
+        self.lstm_U = tf.get_variable("lstm_U", [dim_hidden, dim_hidden*4], initializer=xavier_initializer)
+        self.lstm_b = tf.get_variable("lstm_b", [dim_hidden*4], initializer=constant_initializer)
 
         #Weights for image_encoding
-        self.image_encode_W = self.init_weight(dim_context, dim_hidden*4, name='image_encode_W')
+        self.image_encode_W = tf.get_variable("image_encode_W", [dim_context, dim_hidden*4], initializer=xavier_initializer)
 
         #Initialize attention weights
-        self.image_att_W = self.init_weight(dim_context, dim_context, name='image_att_W')
-        self.hidden_att_W = self.init_weight(dim_hidden, dim_context, name='hidden_att_W')
-        self.pre_att_b = self.init_bias(dim_context, name='pre_att_b')
+        self.image_att_W = tf.get_variable("image_att_W", [dim_context, dim_context], initializer=xavier_initializer)
+        self.hidden_att_W = tf.get_variable("hidden_att_W", [dim_hidden, dim_context], initializer=xavier_initializer)
+        self.pre_att_b = tf.get_variable("pre_att_b", [dim_context], initializer=constant_initializer)
 
         #I'm pretty sure this is the f_{att} model discussed in the paper
         #(the attention model conditioned on h_{t-1}
-        self.att_W = self.init_weight(dim_context, 1, name='att_W')
-        self.att_b = self.init_bias(1, name='att_b')
+        self.att_W = tf.get_variable("att_W", [dim_context, 1], initializer=xavier_initializer)
+        self.att_b = tf.get_variable("att_b", [1], initializer=constant_initializer)
 
         #Initialize decoder weights
         #Goes from LSTM hidden state to a "word" embedding code
-        self.decode_lstm_W = self.init_weight(dim_hidden, dim_embed, name='decode_lstm_W')
-        self.decode_lstm_b = self.init_bias(dim_embed, name='decode_lstm_b')
+        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [dim_hidden, dim_embed], initializer=xavier_initializer)
+        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [dim_embed], initializer=constant_initializer)
 
         #Goes from the word embedding code to an output in the vocab_size space
         #(i.e slap a softmax on it and the output is a probability for each word in the vocab being
         #correct at that timestep)
-        self.decode_word_W = self.init_weight(dim_embed, vocab_size, name='decode_word_W')
-
-        if bias_init_vector is not None:
-            self.decode_word_b = tf.Variable(bias_init_vector.astype(np.float32), name='decode_word_b')
-        else:
-            self.decode_word_b = self.init_bias(vocab_size, name='decode_word_b')
+        self.decode_word_W = tf.get_variable("decode_word_W", [dim_embed, vocab_size], initializer=xavier_initializer)
+        self.decode_word_b = tf.get_variable("decode_word_b", [vocab_size], initializer=constant_initializer)
 
 
     def get_initial_lstm(self, mean_context):
@@ -134,9 +132,14 @@ class Generator(object):
             alpha = tf.reshape(alpha, [-1, self.context_shape[0]]) # (batch_size, L)
             #Alpha now represents the relative importance to give to each of the L annotations for 
             #generating the next word
-            #TODO: Alter how the alphas are computed rather than dropping context?
-            # maybe impose a penalty for this alpha being too similar to the last alpha?
-            # would also have to change how it initializes then too
+            #TODO: Alter how the alphas are computed
+            #My current idea is to create a random masking vector the same shape as the alpha
+            #vector. Values in this noise vector should sum to one. Then a term must be included in the
+            #loss to penalize the attention model for ignoring the random mask. This term should penalize
+            #the produced alphas if they are too far from the mask. Something like:
+            #sum_{i=1}^{L}sum_{c=1}^{3}(alpha_{ic} - randomMask_{i}
+            #Other idea: maybe impose a penalty for this alpha being too similar to the last alpha?
+            #would also have to change how it initializes then too
             alpha = tf.nn.softmax( alpha )
 
             #This is the Phi function for soft attention as explained in section 4.2

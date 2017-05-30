@@ -4,196 +4,160 @@ import numpy as np
 
 
 class Discriminator(object):
-    def init_weight(self, dim_in, dim_out, name=None, stddev=1.0):
-        return tf.Variable(tf.truncated_normal([dim_in, dim_out], stddev=stddev/math.sqrt(float(dim_in))), name=name)
 
-    def init_bias(self, dim_out, name=None):
-        return tf.Variable(tf.zeros([dim_out]), name=name)
-
-    def __init__(self, vocab_size, dim_lstm_hidden=256, batch_size=64, 
-                context_shape=[196, 512], 
-                word_embedding_size=512, bias_init_vector=None):
-
-        #Placeholders
-        #self.context_input = tf.placeholder(tf.float32, context_shape)
-        #self.sequence_input = tf.placeholder(tf.int32, sequence_input_shape)
-        self.context_shape = [batch_size, context_shape[0], context_shape[1]]
-        self.sequence_input_shape = [batch_size, 3, vocab_size]
-
-        self.word_embedding_size = word_embedding_size
-        
+    def __init__(self, vocab_size, dim_embed=512, dim_context=512, dim_hidden=512, n_lstm_steps=3, batch_size=64, context_shape=[196,512], bias_init_vector=None):
         self.vocab_size = vocab_size
-        self.num_image_feats = context_shape[0]
-        self.image_feat_dim = context_shape[1]
-        self.sequence_length = self.sequence_input_shape[1]
+        self.dim_embed = dim_embed
+        self.dim_context = dim_context
+        self.dim_hidden = dim_hidden
+        self.context_shape = context_shape
+        self.n_lstm_steps = n_lstm_steps
         self.batch_size = batch_size
-        tf.set_random_seed(42)
+        self.maxlen = n_lstm_steps
+
+        xavier_initializer = tf.contrib.layers.xavier_initializer()
+        constant_initializer = tf.constant_initializer(0.0)
+        #Initialize the word embeddings
+        with tf.device("/cpu:0"):
+            self.Wemb = tf.get_variable("Wemb", [vocab_size, dim_embed], initializer=xavier_initializer)
+
+        #Initial hidden state of LSTM
+        self.init_hidden_W = tf.get_variable("init_hidden_W", [dim_context, dim_hidden], initializer=xavier_initializer)
+        self.init_hidden_b = tf.get_variable("init_hidden_b", [dim_hidden], initializer=constant_initializer)
+
+        #Initial memory of LSTM
+        self.init_memory_W = tf.get_variable("init_memory_W", [dim_context, dim_hidden], initializer=xavier_initializer)
+        self.init_memory_b = tf.get_variable("init_memory_b", [dim_hidden], initializer=constant_initializer)
+
+        #Initialize LSTM Weights
+        self.lstm_W = tf.get_variable("lstm_W", [dim_embed, dim_hidden*4], initializer=xavier_initializer)
+        self.lstm_U = tf.get_variable("lstm_U", [dim_hidden, dim_hidden*4], initializer=xavier_initializer)
+        self.lstm_b = tf.get_variable("lstm_b", [dim_hidden*4], initializer=constant_initializer)
+
+        #Weights for image_encoding
+        self.image_encode_W = tf.get_variable("image_encode_W", [dim_context, dim_hidden*4], initializer=xavier_initializer)
+
+        #Initialize attention weights
+        self.image_att_W = tf.get_variable("image_att_W", [dim_context, dim_context], initializer=xavier_initializer)
+        self.hidden_att_W = tf.get_variable("hidden_att_W", [dim_hidden, dim_context], initializer=xavier_initializer)
+        self.pre_att_b = tf.get_variable("pre_att_b", [dim_context], initializer=constant_initializer)
+
+        #I'm pretty sure this is the f_{att} model discussed in the paper
+        #(the attention model conditioned on h_{t-1}
+        self.att_W = tf.get_variable("att_W", [dim_context, 1], initializer=xavier_initializer)
+        self.att_b = tf.get_variable("att_b", [1], initializer=constant_initializer)
+
+        #Initialize decoder weights
+        #Goes from LSTM hidden state to a "word" embedding code
+        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [dim_hidden, dim_embed], initializer=xavier_initializer)
+        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [dim_embed], initializer=constant_initializer)
+
+        #Goes from the word embedding code to an output in the vocab_size space
+        #(i.e slap a softmax on it and the output is a probability for each word in the vocab being
+        #correct at that timestep)
+        self.decode_word_W = tf.get_variable("decode_word_W", [dim_embed, 1], initializer=xavier_initializer)
+        self.decode_word_b = tf.get_variable("decode_word_b", [1], initializer=constant_initializer)
 
 
-    def build_discriminator(self, context_input, sequence_input):
+    def get_initial_lstm(self, mean_context):
+        #From the paper: "The initial memory state and hidden state of the LSTM are predicted by an average
+        #of the annotation vectors fed through two separate MLPs (init,c and init,h)"
+        #This is done via the mean_context ops
+        initial_hidden = tf.nn.tanh(tf.matmul(mean_context, self.init_hidden_W) + self.init_hidden_b)
+        initial_memory = tf.nn.tanh(tf.matmul(mean_context, self.init_memory_W) + self.init_memory_b)
 
-        max_len = self.sequence_length
-        #context_input = tf.placeholder(tf.float32, self.context_shape)
-        #sequence_input = tf.placeholder(tf.float32, self.sequence_input_shape)
-        #Context input has shape
+        return initial_hidden, initial_memory
 
-        lstm_cell_size = 512
-        #Shape batch_size, num_image_feats, image_feat_dim
-        V = context_input
-        #Embed each sequence word
+    def build_discriminator(self, context, triples):
+        #The context vector (\hat{z_t} in the paper) is a dynamic representation of a relevant part of an image 
+        #at time t
+        #Here however, the context has more dimensions. The batch_size is obvious, but the context shape refers
+        #to the number of annotations and the dimensionality of each annotation
+        #i.e self.context_shape[0] = #annotations (called L in the paper) and self.context_shape[1] = #dimensions
+        #(D in the paper) The paper describes this in section 3.1.1
+        #context = tf.placeholder("float32", [self.batch_size, self.context_shape[0], self.context_shape[1]])
+        #The sentence represents the collection of words
+        #sentence = tf.placeholder("int32", [self.batch_size, self.n_lstm_steps])
+        #The mask is
+        #mask = tf.placeholder("float32", [self.batch_size, self.n_lstm_steps])
 
-        initializer = tf.random_uniform_initializer(-0.08, 0.08)
-        #w_embed = tf.Variable(tf.random_uniform([self.vocab_size, self.word_embedding_size], -0.08, 0.08))
-        w_embed = tf.get_variable("w_embed", [self.vocab_size, self.word_embedding_size], initializer=initializer)
-        #w_embed = tf.reshape(w_embed, [1, self.vocab_size, self.word_embedding_size])
-        #w_embed = tf.tile(w_embed, [self.batch_size, 1, 1])
-        #Q = tf.nn.embedding_lookup(w_embed, sequence_input)
-        Q_flat = tf.matmul(tf.reshape(sequence_input, [self.batch_size*self.sequence_length, self.vocab_size]), w_embed)
-        Q = tf.reshape(Q_flat, [self.batch_size, self.sequence_length, self.word_embedding_size])
-        #To stay consistent with the paper's notation
-        V_t = V
-        Q_t = Q
-        Q = tf.transpose(Q, perm=[0,2,1])
-        V = tf.transpose(V, perm=[0,2,1])
+        #From the paper: "The initial memory state and hidden state of the LSTM are predicted by an average
+        #of the annotation vectors fed through two separate MLPs (init,c and init,h)"
+        #This reduce mean call averages across the second dimension, i.e the L annotations 
 
-        #Embed the whole sequence
-        with tf.variable_scope("sequence_attention"):
-            triple_embedder = tf.contrib.rnn.LSTMCell(lstm_cell_size, use_peepholes=True)
-            initializer = tf.random_uniform_initializer(-0.08, 0.08)
+        h, c = self.get_initial_lstm(tf.reduce_mean(context, 1))#(batch_size, D)
 
-            #Output is of shape [seq_length, batch_size, cell.output_size]
-            output, _ = tf.nn.dynamic_rnn(triple_embedder, Q_t, dtype=tf.float32, swap_memory=True)
-            #Q_t_unstacked = tf.unstack(Q_t, self.sequence_length, 1)
-            #output, _ = tf.contrib.rnn.static_rnn(triple_embedder, Q_t_unstacked, dtype=tf.float32)
-            #Output is now of shape batch_size, seq_length, cell.output_size
-            #output = tf.transpose(output, perm=[1,0,2])
-            #print output
+        #The flattened context
+        #The tf.reshape function takes context and reshapes it so that the total number of elements
+        #remains constant. This is done by the -1 argument. So the shape will be [(batch_size*L), D]
+        context_flat = tf.reshape(context, [-1, self.dim_context])
+        #Encode the context by multiplying by image attention weights
+        context_encode = tf.matmul(context_flat, self.image_att_W) # (batch_size*L, D)
+        context_encode = tf.reshape(context_encode, [-1, self.context_shape[0], self.context_shape[1]]) #(batch_size, L, D)
 
-            #Affinity weights for equation_3, but applied to triple_embedder LSTM outputs instead
-            W_b_lstm = tf.get_variable("w_b_lstm", [lstm_cell_size, self.image_feat_dim], initializer=initializer)
-            #Again to stay consistent with paper notation, we switch output and output transpose
-            output_t = output
-            output = tf.transpose(output, perm=[0,2,1])
-            #C_lstm is the affinity matrix of shape batch_size, sequence_length, num_image_feats
-            C_lstm_flat = tf.matmul(tf.reshape(output_t, [self.batch_size*self.sequence_length, lstm_cell_size]), W_b_lstm)
-            C_lstm = tf.reshape(C_lstm_flat, [self.batch_size, self.sequence_length, self.image_feat_dim])
-            #C_lstm is shape [batch_size, maxlen, num_image_feats]
-            C_lstm = tf.tanh(tf.matmul(C_lstm, V))
-            C_lstm_t = tf.transpose(C_lstm, perm=[0,2,1])
+        #The number of lstm_steps is how many outputs the LSTM will make
+        l = []
+        for ind in range(self.n_lstm_steps):
 
-            #Setting up equation 4
-            k=256
-            W_v_lstm = tf.get_variable("w_v_lstm", [self.image_feat_dim, k], initializer=initializer)
+            #Will produce a tensor of shape [batch_size, 1, word_embedding_size]
+            seq_input_at_ind = tf.reshape(triples[:, ind, :], [self.batch_size, -1])
+            word_emb = tf.matmul(seq_input_at_ind, self.Wemb)
 
-            W_q_lstm = tf.get_variable("w_q_lstm", [lstm_cell_size, k], initializer=initializer)
+            #This is the T_{D+m+n,n} affine transformation referred to in section 3.1.2
+            x_t = tf.matmul(word_emb, self.lstm_W) + self.lstm_b # (batch_size, hidden*4)
+            
+            context_encode = context_encode + \
+                 tf.expand_dims(tf.matmul(h, self.hidden_att_W), 1) + \
+                 self.pre_att_b
 
-            w_lstm_hv = tf.get_variable("w_lstm_hv", [k,1], initializer=initializer)
+            context_encode = tf.nn.tanh(context_encode)
 
-            w_lstm_hq = tf.get_variable("w_lstm_hq", [k,1], initializer=initializer)
+            #context_encode: 3D -> flat required
+            context_encode_flat = tf.reshape(context_encode, [-1, self.dim_context]) # (batch_size*L, D)
+            alpha = tf.matmul(context_encode_flat, self.att_W) + self.att_b # (batch_size*L, 1)
+            alpha = tf.reshape(alpha, [-1, self.context_shape[0]]) # (batch_size, L)
+            #Alpha now represents the relative importance to give to each of the L annotations for 
+            #generating the next word
+            #TODO: Alter how the alphas are computed
+            #My current idea is to create a random masking vector the same shape as the alpha
+            #vector. Values in this noise vector should sum to one. Then a term must be included in the
+            #loss to penalize the attention model for ignoring the random mask. This term should penalize
+            #the produced alphas if they are too far from the mask. Something like:
+            #sum_{i=1}^{L}sum_{c=1}^{3}(alpha_{ic} - randomMask_{i}
+            #Other idea: maybe impose a penalty for this alpha being too similar to the last alpha?
+            #would also have to change how it initializes then too
+            alpha = tf.nn.softmax( alpha )
 
-            #Equation 4
-            #Should be [batch_size, k, l]
-            Hv_ = tf.matmul(tf.reshape(V, [self.batch_size*self.num_image_feats, self.image_feat_dim]), W_v_lstm)
-            Hv_ = tf.transpose(tf.reshape(Hv_, [self.batch_size, self.num_image_feats, k]), perm=[0,2,1])
-            #Should be [batch_size, k, sequence_length]
-            Hq_ = tf.matmul(tf.reshape(output_t, [self.batch_size*self.sequence_length, lstm_cell_size]), W_q_lstm)
-            Hq_ = tf.transpose(tf.reshape(Hq_, [self.batch_size, self.sequence_length, k]), perm=[0,2,1])
-            Hv_lstm = tf.tanh(tf.add(Hv_, tf.matmul(Hq_, C_lstm)))
-            Hq_lstm = tf.tanh(tf.add(Hq_, tf.matmul(Hv_, C_lstm_t)))
+            #This is the Phi function for soft attention as explained in section 4.2
+            #Thus weighted context is equal to \hat{z}
+            weighted_context = tf.reduce_sum(context * tf.expand_dims(alpha, 2), 1) #(batch_size, D)
 
+            lstm_preactive = tf.matmul(h, self.lstm_U) + x_t + tf.matmul(weighted_context, self.image_encode_W)
+            #LSTM Computations
+            #tf.split(
+            i, f, o, new_c = tf.split(lstm_preactive, 4, 1)
 
-            #av is a batch of vectors of length self.num_image_feats
-            #aq is a batch of vectors of length self.sequence_length
-            Hv_lstm = tf.transpose(Hv_lstm, perm=[0,2,1])
-            Hv_lstm = tf.reshape(Hv_lstm, [self.batch_size*self.num_image_feats, k])
-            av_lstm = tf.nn.softmax(tf.matmul(Hv_lstm, w_lstm_hv))
-            av_lstm = tf.reshape(av_lstm, [self.batch_size, 1, self.num_image_feats])
-            Hq_lstm = tf.transpose(Hq_lstm, perm=[0,2,1])
-            Hq_lstm = tf.reshape(Hq_lstm, [self.batch_size*self.sequence_length, k])
-            aq_lstm = tf.nn.softmax(tf.matmul(Hq_lstm, w_lstm_hq))
-            aq_lstm = tf.reshape(aq_lstm, [self.batch_size, 1, self.sequence_length])
-            #Equation 5
-            v_hats = tf.matmul(av_lstm, V, transpose_a=False, transpose_b=True)
-            q_hats = tf.matmul(aq_lstm, output, transpose_a=False, transpose_b=True)
+            i = tf.nn.sigmoid(i)
+            f = tf.nn.sigmoid(f)
+            o = tf.nn.sigmoid(o)
+            new_c = tf.nn.tanh(new_c)
 
-            v_hats = tf.reshape(v_hats, [self.batch_size, -1])
-            q_hats = tf.reshape(q_hats, [self.batch_size, -1])
+            c = f * c + i * new_c
+            h = o * tf.nn.tanh(new_c)
 
-        with tf.variable_scope("word_attention"):
-            initializer = tf.random_uniform_initializer(-0.08, 0.08)
-            W_b = tf.get_variable("w_b", [self.word_embedding_size, self.image_feat_dim], initializer=initializer)
-            #Again to stay consistent with paper notation, we switch output and output transpose
-            Q_t = tf.transpose(Q, perm=[0,2,1])
-            #Equation 3 in https://arxiv.org/pdf/1606.00061.pdf
-            #C is the affinity matrix of shape batch_size, sequence_length, num_image_feats
-            C_flat = tf.matmul(tf.reshape(Q_t, [self.batch_size*self.sequence_length, self.word_embedding_size]), W_b)
-            C = tf.reshape(C_flat, [self.batch_size, self.sequence_length, self.image_feat_dim])
-            #C_lstm is shape [batch_size, maxlen, num_image_feats]
-            C = tf.tanh(tf.matmul(C, V))
-            C_t = tf.transpose(C, perm=[0,2,1])
+            logits = tf.matmul(h, self.decode_lstm_W) + self.decode_lstm_b
+            logits = tf.nn.relu(logits)
+            logits = tf.nn.dropout(logits, 0.5)
 
-            #Setting up equation 4
-            k=256
-            W_v = tf.get_variable("w_v", [self.image_feat_dim, k], initializer=initializer)
+            logit_words = tf.matmul(logits, self.decode_word_W) + self.decode_word_b
+            #word_prob = tf.nn.softmax(logit_words)
+            #word_prediction = tf.argmax(logit_words, 1)
+            #l.append(word_prob)
 
-            W_q = tf.get_variable("w_q", [self.word_embedding_size, k], initializer=initializer)
+        #word_probs = tf.stack(l)
+        #word_probs = tf.transpose(word_probs, [1, 0, 2])
+        return logit_words
 
-            w_hv = tf.get_variable("w_hv", [k,1], initializer=initializer)
-
-            w_hq = tf.get_variable("w_hq", [k,1], initializer=initializer)
-
-            #Equation 4 in https://arxiv.org/pdf/1606.00061.pdf
-            #Should be [batch_size, k, l]
-            Hv_ = tf.matmul(tf.reshape(V, [self.batch_size*self.num_image_feats, self.image_feat_dim]), W_v)
-            Hv_ = tf.transpose(tf.reshape(Hv_, [self.batch_size, self.num_image_feats, k]), perm=[0,2,1])
-            #Should be [batch_size, k, sequence_length]
-            Hq_ = tf.matmul(tf.reshape(output_t, [self.batch_size*self.sequence_length, self.word_embedding_size]), W_q)
-            Hq_ = tf.transpose(tf.reshape(Hq_, [self.batch_size, self.sequence_length, k]), perm=[0,2,1])
-            Hv = tf.tanh(tf.add(Hv_, tf.matmul(Hq_, C)))
-            Hq = tf.tanh(tf.add(Hq_, tf.matmul(Hv_, C_t)))
-
-            #av is a batch of vectors of length self.num_image_feats
-            #aq is a batch of vectors of length self.sequence_length
-            Hv = tf.transpose(Hv, perm=[0,2,1])
-            Hv = tf.reshape(Hv, [self.batch_size*self.num_image_feats, k])
-            av = tf.nn.softmax(tf.matmul(Hv, w_hv))
-            av = tf.reshape(av, [self.batch_size, 1, self.num_image_feats])
-            Hq = tf.transpose(Hq, perm=[0,2,1])
-            Hq = tf.reshape(Hq, [self.batch_size*self.sequence_length, k])
-            aq = tf.nn.softmax(tf.matmul(Hq, w_hq))
-            aq = tf.reshape(aq, [self.batch_size, 1, self.sequence_length])
-            #Equation 5
-            v_hatw = tf.matmul(av, V, transpose_a=False, transpose_b=True)
-            q_hatw = tf.matmul(aq, output, transpose_a=False, transpose_b=True)
-
-            v_hatw = tf.reshape(v_hatw, [self.batch_size, -1])
-            q_hatw = tf.reshape(q_hatw, [self.batch_size, -1])
-
-        #Setting up equation 7
-        hw_dim = 256
-        hs_dim = 128
-
-        W_w = tf.get_variable("w_w", [self.image_feat_dim, hw_dim], initializer=initializer)
-        b_w = tf.get_variable("b_w", [hw_dim], initializer=initializer)
-
-        W_s = tf.get_variable("w_s", [hw_dim+int(v_hatw.get_shape()[1]), hs_dim], initializer=initializer)
-        b_s = tf.get_variable("b_s", [hs_dim], initializer=initializer)
-
-        W_h = tf.get_variable("w_h", [hs_dim, 1], initializer=initializer)
-        b_h = tf.get_variable("b_h", [1], initializer=initializer)
-
-        #Equation 7
-        hw = tf.tanh(tf.add(tf.matmul(tf.add(q_hatw, v_hatw), W_w), b_w))
-        #We don't convolve on unigrams, bigrams, and trigrams because the input sequence is so short
-        #hp = tf.tanh(tf.matmul(W_p, tf.concat(tf.add(q_hatp, v_hatp), hw)))
-        added = tf.add(q_hats, v_hats)
-        concat = tf.concat([added, hw], 1)
-        hs = tf.tanh(tf.add(tf.matmul(concat, W_s), b_s))
-        logits = tf.add(tf.matmul(hs, W_h), b_h)
-        #out = tf.sigmoid(tf.matmul(W_h, hs))
-        out = tf.sigmoid(logits)
-        #Return the logits for the wasserstein gan
-        return logits
 
 
 if __name__ == "__main__":
@@ -203,10 +167,10 @@ if __name__ == "__main__":
     #context_input = tf.get_variable("input_features", [batch_size, 196, 512])
     #sequence_input = tf.get_variable("sequence_input", [batch_size, 3, vocab_size])
 
-    #context_input = np.zeros((batch_size, 196, 512), dtype=np.float32)
-    #sequence_input = np.zeros((batch_size, 3, vocab_size), dtype=np.float32)
-    context_input = np.load("ims.npy")
-    sequence_input = np.load("triples.npy")
+    context_input = np.zeros((batch_size, 196, 512), dtype=np.float32)
+    sequence_input = np.zeros((batch_size, 3, vocab_size), dtype=np.float32)
+    #context_input = np.load("ims.npy")
+    #sequence_input = np.load("triples.npy")
     logits = d.build_discriminator(context_input, sequence_input)
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
