@@ -1,5 +1,7 @@
+import os, sys
+sys.path.append(os.getcwd())
+
 import requests
-import os
 
 def streamSaveLink(link, filename):
     r = requests.get(link, stream = True)
@@ -17,7 +19,6 @@ def getVisualGenome(save_path):
         filename = "{}{}".format(save_path, l.split("/")[-1])
         streamSaveLink(l, filename)
     
-#TODO Make available via a google drive link or something
 def getVGGModel(save_path):
     link = "https://s3.amazonaws.com/cadl/models/vgg16.tfmodel"
     r = requests.get(link, stream = True)
@@ -27,7 +28,7 @@ def getVGGModel(save_path):
 
 if __name__ == "__main__":
     #Read in visual genome parameter from ../config.txt
-    with open("../config.txt", "r") as f:
+    with open("./config.txt", "r") as f:
         for line in f:
             line_ = line.split()
             if line_[0] == "visual_genome":

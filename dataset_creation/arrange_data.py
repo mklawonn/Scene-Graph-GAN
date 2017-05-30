@@ -1,14 +1,18 @@
+import os, sys
+sys.path.append(os.getcwd())
+
+import json
+
 from subprocess import call
-import os
 
 def unzipAll(save_path):
     for f in os.listdir(save_path):
         if f[-4:] == ".zip":
-            call(["unzip", f])
+            call(["unzip", os.path.join(save_path, f), "-d", save_path])
 
 def addAttributes(save_path):
     attr_data = json.load(open(os.path.join(save_path, 'attributes.json')))
-    with open(os.path.join(dataDir, 'scene_graphs.json')) as f:
+    with open(os.path.join(save_path, 'scene_graphs.json')) as f:
         sg_dict = {sg['image_id']:sg for sg in json.load(f)}
 
     id_count = 0
@@ -31,7 +35,7 @@ def addAttributes(save_path):
 
 if __name__ == "__main__":
     #Read in path to the data
-    with open("../config.txt", "r") as f:
+    with open("./config.txt", "r") as f:
         for line in f:
             line_ = line.split()
             if line_[0] == "visual_genome":
@@ -44,7 +48,7 @@ if __name__ == "__main__":
     if not os.path.exists(all_images):
         os.makedirs(all_images)
     #Move all images to "all_images"
-    call(["mv", "{}images/*".format(path_to_data), all_images])
-    call(["mv", "{}images2/*".format(path_to_data), all_images])
+    call(["mv", "{}VG_100K/*".format(path_to_data), all_images])
+    call(["mv", "{}VG_100K_2/*".format(path_to_data), all_images])
     #Add attributes to scene graphs
     addAttributes(path_to_data)

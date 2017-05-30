@@ -1,8 +1,11 @@
-from models import Image, Object, Attribute, Relationship
-from models import Region, Graph, QA, QAObject, Synset
+import os, sys
+sys.path.append(os.getcwd())
+
+from preprocessing.models import Image, Object, Attribute, Relationship
+from preprocessing.models import Region, Graph, QA, QAObject, Synset
 import httplib
 import json
-import utils
+import preprocessing.utils
 import os, gc
 
 """

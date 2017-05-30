@@ -1,4 +1,7 @@
-import local as vg
+import os, sys
+sys.path.append(os.getcwd())
+
+import preprocessing.local as vg
 import tensorflow as tf
 import numpy as np
 import os
@@ -315,7 +318,7 @@ def toNPZ(path_to_data, vgg_tf_model):
 
 
 if __name__ == "__main__":
-    with open("../config.txt", "r") as f:
+    with open("./config.txt", "r") as f:
         for line in f:
             line_ = line.split()
             if line_[0] == "visual_genome":
