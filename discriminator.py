@@ -16,10 +16,9 @@ class Discriminator(object):
         self.maxlen = n_lstm_steps
 
         xavier_initializer = tf.contrib.layers.xavier_initializer()
-        constant_initializer = tf.constant_initializer(0.0)
-        #Initialize the word embeddings
-        with tf.device("/cpu:0"):
-            self.Wemb = tf.get_variable("Wemb", [vocab_size, dim_embed], initializer=xavier_initializer)
+        constant_initializer = tf.constant_initializer(0.05)
+        """#Initialize the word embeddings
+        self.Wemb = tf.get_variable("Wemb", [vocab_size, dim_embed], initializer=xavier_initializer)
 
         #Initial hidden state of LSTM
         self.init_hidden_W = tf.get_variable("init_hidden_W", [dim_context, dim_hidden], initializer=xavier_initializer)
@@ -56,7 +55,19 @@ class Discriminator(object):
         #(i.e slap a softmax on it and the output is a probability for each word in the vocab being
         #correct at that timestep)
         self.decode_word_W = tf.get_variable("decode_word_W", [dim_embed, 1], initializer=xavier_initializer)
-        self.decode_word_b = tf.get_variable("decode_word_b", [1], initializer=constant_initializer)
+        self.decode_word_b = tf.get_variable("decode_word_b", [1], initializer=constant_initializer)"""
+        self.Wemb = tf.get_variable("Wemb", [vocab_size, dim_embed], initializer=xavier_initializer)
+        self.embed_triple_W = tf.get_variable("embed_triple_W", [self.maxlen*dim_embed, dim_embed], initializer=xavier_initializer)
+        self.embed_triple_b = tf.get_variable("embed_triple_b", [dim_embed], initializer=constant_initializer)
+
+        self.embed_image_W = tf.get_variable("embed_image_W", [context_shape[0]*context_shape[1], dim_embed], initializer=xavier_initializer)
+        self.embed_image_b = tf.get_variable("embed_image_b", [dim_embed], initializer=constant_initializer)
+
+        self.out_W_1 = tf.get_variable("out_W_1", [dim_embed*2, dim_embed], initializer=xavier_initializer)
+        self.out_b_1 = tf.get_variable("out_b_1", [dim_embed], initializer=constant_initializer)
+
+        self.out_W_2 = tf.get_variable("out_W_2", [dim_embed, 1], initializer=xavier_initializer)
+        self.out_b_2 = tf.get_variable("out_b_2", [1], initializer=constant_initializer)
 
 
     def get_initial_lstm(self, mean_context):
@@ -68,7 +79,7 @@ class Discriminator(object):
 
         return initial_hidden, initial_memory
 
-    def build_discriminator(self, context, triples):
+    """def build_discriminator(self, context, triples):
         #The context vector (\hat{z_t} in the paper) is a dynamic representation of a relevant part of an image 
         #at time t
         #Here however, the context has more dimensions. The batch_size is obvious, but the context shape refers
@@ -156,8 +167,51 @@ class Discriminator(object):
 
         #word_probs = tf.stack(l)
         #word_probs = tf.transpose(word_probs, [1, 0, 2])
-        return logit_words
+        return logit_words"""
 
+    
+    """def build_discriminator(self, context, triples):
+        #Embed the triple
+        flattened_seq = tf.reshape(triples, [self.batch_size*self.maxlen, self.vocab_size])
+        embedded_seq = tf.matmul(flattened_seq, self.Wemb)
+        embedded_seq = tf.reshape(embedded_seq, [self.batch_size, self.maxlen, self.dim_embed])
+        embedded_seq = tf.reshape(embedded_seq, [self.batch_size, self.maxlen*self.dim_embed])
+        embedded_seq = tf.add(tf.matmul(embedded_seq, self.embed_triple_W), self.embed_triple_b)
+
+        #Embed the image features
+        flattened_im = tf.reshape(context, [self.batch_size, self.context_shape[0]*self.context_shape[1]])
+        embedded_im = tf.add(tf.matmul(flattened_im, self.embed_image_W), self.embed_image_b)
+
+        #Concatenate
+        concatenated = tf.concat([embedded_seq, embedded_im], 1)
+
+        #Run concatenated vector through output MLP
+        h1 = tf.add(tf.matmul(concatenated, self.out_W_1), self.out_b_1)
+        h2 = tf.add(tf.matmul(h1, self.out_W_2), self.out_b_2)
+        return h2"""
+
+    def ResBlock(self, name, inputs):
+        output = inputs
+        output = tf.nn.relu(output)
+        
+        output = lib.ops.conv1d.Conv1D(name+'.1', self.DIM, self.DIM, 5, output)
+        output = tf.nn.relu(output)
+        output = lib.ops.conv1d.Conv1D(name+'.2', self.DIM, self.DIM, 5, output)
+        return inputs + (0.3*output)
+
+
+    def build_discriminator(self, context, triples):
+        output = inputs
+        output = tf.nn.relu(output)
+        #output = lib.ops.conv1d.Conv1D(name+'.1', self.DIM, self.DIM, 5, output)
+        output = tf.nn.conv1d(output, self.conv_1, stride=1, padding="VALID")
+        output = tf.nn.relu(output)
+        #output = lib.ops.conv1d.Conv1D(name+'.2', self.DIM, self.DIM, 5, output)
+        output = tf.nn.conv1d(output, self.conv_2, stride=1, padding="VALID")
+        return inputs + (0.3*output)
+
+
+        
 
 
 if __name__ == "__main__":

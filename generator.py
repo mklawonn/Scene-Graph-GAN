@@ -23,12 +23,12 @@ class Generator(object):
         self.n_lstm_steps = n_lstm_steps
         self.batch_size = batch_size
         self.maxlen = n_lstm_steps
+        self.noise_dim = 128
 
         xavier_initializer = tf.contrib.layers.xavier_initializer()
-        constant_initializer = tf.constant_initializer(0.0)
-        #Initialize the word embeddings
-        with tf.device("/cpu:0"):
-            self.Wemb = tf.get_variable("Wemb", [vocab_size, dim_embed], initializer=xavier_initializer)
+        constant_initializer = tf.constant_initializer(0.05)
+        """#Initialize the word embeddings
+        self.Wemb = tf.get_variable("Wemb", [vocab_size, dim_embed], initializer=xavier_initializer)
 
         #Initial hidden state of LSTM
         self.init_hidden_W = tf.get_variable("init_hidden_W", [dim_context, dim_hidden], initializer=xavier_initializer)
@@ -65,7 +65,29 @@ class Generator(object):
         #(i.e slap a softmax on it and the output is a probability for each word in the vocab being
         #correct at that timestep)
         self.decode_word_W = tf.get_variable("decode_word_W", [dim_embed, vocab_size], initializer=xavier_initializer)
-        self.decode_word_b = tf.get_variable("decode_word_b", [vocab_size], initializer=constant_initializer)
+        self.decode_word_b = tf.get_variable("decode_word_b", [vocab_size], initializer=constant_initializer)"""
+
+        #The weights for encoding the context to feed it into the attention MLP
+        #Needs to be encoded in order to combine it with the previous hidden state
+        self.context_encode_W = tf.get_variable("context_encode", [self.context_shape[0]*self.context_shape[1], self.dim_context*2], initializer=xavier_initializer)
+
+        self.Wemb = tf.get_variable("Wemb", [self.vocab_size, self.dim_embed], initializer=xavier_initializer)
+
+        self.att_W = tf.get_variable("att_W", [(self.dim_context*2)+self.dim_hidden+self.noise_dim, self.context_shape[0]], initializer=xavier_initializer)
+        self.att_b = tf.get_variable("att_b", [self.context_shape[0]], initializer=constant_initializer)
+
+        self.lstm_W = tf.get_variable("lstm_W", [self.dim_context+self.dim_hidden+self.dim_embed, self.dim_hidden*4], initializer=xavier_initializer)
+        self.lstm_b = tf.get_variable("lstm_b", [self.dim_hidden*4], initializer=constant_initializer)
+
+        self.init_hidden_W = tf.get_variable("init_hidden_W", [self.dim_context, self.dim_hidden], initializer=xavier_initializer)
+        self.init_hidden_b = tf.get_variable("init_hidden_b", [self.dim_hidden], initializer=constant_initializer)
+
+        self.init_memory_W = tf.get_variable("init_memory_W", [self.dim_context, self.dim_hidden], initializer=xavier_initializer)
+        self.init_memory_b = tf.get_variable("init_memory_b", [self.dim_hidden], initializer=constant_initializer)
+
+        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.vocab_size], initializer=xavier_initializer)
+        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.vocab_size], initializer=constant_initializer)
+
 
 
     def get_initial_lstm(self, mean_context):
@@ -77,7 +99,7 @@ class Generator(object):
 
         return initial_hidden, initial_memory
 
-    def build_generator(self, context):
+    """def build_generator(self, context):
         #The context vector (\hat{z_t} in the paper) is a dynamic representation of a relevant part of an image 
         #at time t
         #Here however, the context has more dimensions. The batch_size is obvious, but the context shape refers
@@ -112,10 +134,9 @@ class Generator(object):
                 word_emb = tf.zeros([self.batch_size, self.dim_embed])
             else:
                 tf.get_variable_scope().reuse_variables()
-                with tf.device("/cpu:0"):
-                    #word_emb = tf.nn.embedding_lookup(self.Wemb, sentence[:,ind-1])
-                    #The calculation will be made based on the last word looked at
-                    word_emb = tf.nn.embedding_lookup(self.Wemb, word_prediction)
+                #word_emb = tf.nn.embedding_lookup(self.Wemb, sentence[:,ind-1])
+                #The calculation will be made based on the last word looked at
+                word_emb = tf.nn.embedding_lookup(self.Wemb, word_prediction)
 
             #This is the T_{D+m+n,n} affine transformation referred to in section 3.1.2
             x_t = tf.matmul(word_emb, self.lstm_W) + self.lstm_b # (batch_size, hidden*4)
@@ -170,7 +191,65 @@ class Generator(object):
 
         word_probs = tf.stack(l)
         word_probs = tf.transpose(word_probs, [1, 0, 2])
+        return word_probs"""
+
+    def build_generator(self, context):
+        #From the paper: The initial memory state and hidden state of the LSTM are predicted
+        #by an average of the annotation vectors fed through two separate MLPs
+        h, c = self.get_initial_lstm(tf.reduce_mean(context, 1))#(batch_size, dim_hidden)
+
+        
+        noise = tf.random_normal([self.batch_size, self.noise_dim])
+
+        l = []
+
+        for ind in range(self.n_lstm_steps):
+            if ind == 0:
+                word_emb = tf.zeros([self.batch_size, self.dim_embed])
+            else:
+                word_emb = tf.nn.embedding_lookup(self.Wemb, word_prediction)
+            #Calculate \hat{z}
+            #Equation (4)
+            #Concatenate flattened context with previous hidden state and the noise vector, and feed through attention mlp
+            flattened_context = tf.reshape(context, [self.batch_size, self.context_shape[0]*self.context_shape[1]])
+            encoded_context = tf.matmul(flattened_context, self.context_encode_W)
+            context_and_hidden_state = tf.concat([encoded_context, h, noise], 1)
+            e = tf.add(tf.matmul(context_and_hidden_state, self.att_W), self.att_b)
+            #Equation (5)
+            alpha = tf.nn.softmax(e)
+            #Equation (6) and (13): Soft attention model
+            z_hat = tf.reduce_sum(context * tf.expand_dims(alpha, 2), 1) #Output is [batch size, D]
+            #Equation (1)
+            #Concatenate \hat{z}_t , h_{t-1}, and the embedding of the previous word 
+            lstm_input = tf.concat([z_hat, h, word_emb], 1)
+            #Perform affine transformation of concatenated vector
+            affine = tf.add(tf.matmul(lstm_input, self.lstm_W), self.lstm_b)
+            i, f, o, g = tf.split(affine, 4, 1)
+            #i_t = sigmoid(affine)
+            i = tf.nn.sigmoid(i)
+            #f_t = sigmoid(affine)
+            f = tf.nn.sigmoid(f)
+            #o_t = sigmoid(affine)
+            o = tf.nn.sigmoid(o)
+            #g_t = tanh(affine)
+            g = tf.nn.tanh(g)
+
+            #Equation (2)
+            #c_t = f_t * c_{t-1} + i_t * g_t
+            c = f * c + i * g
+            #h_t = o_t * tanh(c_t)
+            h = o * tf.nn.tanh(c)
+
+            logits = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
+            word_prob = tf.nn.softmax(logits)
+            word_prediction = tf.argmax(logits, 1)
+            l.append(word_prob)
+
+        word_probs = tf.stack(l)
+        #We want it in shape [batch_size, seq_len, vocab_size]
+        word_probs = tf.transpose(word_probs, [1,0,2])
         return word_probs
+
 
 if __name__ == "__main__":
     g = Generator(10000)

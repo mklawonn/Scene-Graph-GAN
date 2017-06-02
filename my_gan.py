@@ -16,6 +16,7 @@ import tflib.plot
 from tqdm import tqdm
 from generator import Generator
 from discriminator import Discriminator
+from subprocess import call
 
 
 class SceneGraphWGAN(object):
@@ -24,6 +25,18 @@ class SceneGraphWGAN(object):
         self.batch_path += "/" if self.batch_path[-1] != "/" else ""
         self.path_to_vocab_json = path_to_vocab_json
         self.path_to_vocab_json += "/" if self.path_to_vocab_json != "/" else ""
+        self.logs_dir = "./logs/"
+        self.checkpoints_dir = os.path.join(self.logs_dir, "checkpoints/")
+        self.summaries_dir = os.path.join(self.logs_dir, "summaries/")
+
+        if not os.path.exists(self.checkpoints_dir):
+            os.makedirs(self.checkpoints_dir)
+
+        if not os.path.exists(self.summaries_dir):
+            os.makedirs(self.summaries_dir)
+
+        
+        call(["rm", "{}*".format(self.summaries_dir)])
 
         #Calculating vocabulary and sequence lengths
         with open(path_to_vocab_json, "r") as f:
@@ -38,7 +51,7 @@ class SceneGraphWGAN(object):
         #Hyperparameters
         self.BATCH_SIZE = BATCH_SIZE
         self.LAMBDA = 10
-        self.CRITIC_ITERS = 10
+        self.CRITIC_ITERS = 25
         self.DIM = 512
         self.ITERS = 100000
 
@@ -118,6 +131,9 @@ class SceneGraphWGAN(object):
         disc_cost = tf.reduce_mean(disc_fake) - tf.reduce_mean(disc_real)
         gen_cost = -tf.reduce_mean(disc_fake)
 
+        tf.summary.scalar("Discriminator Cost", disc_cost)
+        tf.summary.scalar("Generator Cost", gen_cost)
+
         # WGAN lipschitz-penalty
         alpha = tf.random_uniform(
             shape=[self.BATCH_SIZE,1,1], 
@@ -138,8 +154,24 @@ class SceneGraphWGAN(object):
         gen_params = [v for v in train_variables if v.name.startswith("Generator")]
         disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
 
-        self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=gen_params)
-        self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=disc_params)
+        optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
+
+        gen_grads = optimizer.compute_gradients(gen_cost, var_list=gen_params)
+        disc_grads = optimizer.compute_gradients(disc_cost, var_list=disc_params)
+
+        #self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=gen_params)
+        #self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=disc_params)
+
+        self.gen_train_op = optimizer.apply_gradients(gen_grads)
+        self.disc_train_op = optimizer.apply_gradients(disc_grads)
+
+        for grad, var in gen_grads:
+            if grad is not None:
+                tf.summary.histogram(var.op.name + "/gradient", grad)
+
+        for grad, var in disc_grads:
+            if grad is not None:
+                tf.summary.histogram(var.op.name + "/gradient", grad)
 
     def DataGenerator(self):
         filenames = ["{}{}".format(self.batch_path, i) for i in os.listdir(self.batch_path)]
@@ -164,11 +196,27 @@ class SceneGraphWGAN(object):
                 del indices[-self.BATCH_SIZE:]
                 yield im_batch, t_batch
 
+    """def generateSamples(self, session):
+        #Load features from a specific image
+        ##Load the image
+        path_to_image = "/home/mklawonn/visual_genome/all_images/0.jpg"
+        ##Extract features
+        ##Load the image in a tensor
+        #Generate triples from this image
+        
+        #Write a summary that puts the image and ground truth in tensorboard
+        #Write a summary that puts generated triples into tensorboard"""
+
 
     def Train(self, epochs):
+        self.saver = tf.train.Saver()
         self.Loss()
+        summary_op = tf.summary.merge_all()
         start_time = time.time()
         with tf.Session() as session:
+            #self.generateSamples(session)
+            writer = tf.summary.FileWriter(self.summaries_dir, session.graph)
+
 
             session.run(tf.global_variables_initializer())
 
@@ -185,40 +233,46 @@ class SceneGraphWGAN(object):
 
             gen = self.DataGenerator()
 
-            iteration = 0
-            for im_batch, triple_batch in self.DataGenerator():
-                #Train Generator
-                if iteration > 0:
-                    _ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch})
+            for epoch in range(epochs):
+                iteration = 0
+                for im_batch, triple_batch in self.DataGenerator():
+                    #Train Generator
+                    if iteration > 0:
+                        _ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch})
 
-                #Train Critic
-                for i in xrange(self.CRITIC_ITERS):
-                    #im_batch, triple_batch = gen.next()
-                    _disc_cost, _ = session.run(
-                        [self.disc_cost, self.disc_train_op],
-                        feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch}
-                    )
+                    #Train Critic
+                    for i in xrange(self.CRITIC_ITERS):
+                        #im_batch, triple_batch = gen.next()
+                        _disc_cost, _ = session.run(
+                            [self.disc_cost, self.disc_train_op],
+                            feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch}
+                        )
 
-                if iteration % 200 == 0:
+                    if iteration % 5 == 0:
 
-                    stop_time = time.time()
-                    duration = (stop_time - start_time) / 200.0
-                    start_time = stop_time
-                    _gen_cost = session.run(self.gen_cost, feed_dict={self.image_feats:im_batch})
+                        """stop_time = time.time()
+                        duration = (stop_time - start_time) / 200.0
+                        start_time = stop_time"""
+                        summary, _gen_cost = session.run([summary_op, self.gen_cost], feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch})
+                        writer.add_summary(summary, iteration)
+                        writer.flush()
 
-                    print "Time {}/itr, Step: {}, generator loss: {}, discriminator loss: {}".format(
-                            duration, iteration, _gen_cost, _disc_cost)
+                        """print "Time {}/itr, Step: {}, generator loss: {}, discriminator loss: {}".format(
+                                duration, iteration, _gen_cost, _disc_cost)"""
 
-                if iteration % 5000 == 0:
-                    samples = []
-                    for i in xrange(10):
-                        samples.extend(generate_samples(im_batch))
+                    if iteration % 25 == 0:
+                        samples = []
+                        for i in xrange(10):
+                            samples.extend(generate_samples(im_batch))
 
-                    with open('./samples/samples_{}.txt'.format(iteration), 'w') as f:
-                        for s in samples:
-                            s = " ".join(s)
-                            f.write(s + "\n")
-                iteration += 1
+                        with open('./samples/samples_{}.txt'.format(iteration), 'w') as f:
+                            for s in samples:
+                                s = " ".join(s)
+                                f.write(s + "\n")
+
+                        
+                        self.saver.save(session, os.path.join(self.checkpoints_dir, "model.ckpt"), global_step=(epoch+1)*iteration)
+                    iteration += 1
 
 
 if __name__ == "__main__":
