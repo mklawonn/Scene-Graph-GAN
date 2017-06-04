@@ -51,6 +51,40 @@ def computeImageMean(image_dir):
 
     return r_mean, g_mean, b_mean
 
+def normalizeFeatures(batch_dir):
+    #Go through all batches once and calculate the min, max, and means
+    max_val = 0
+    min_val = 10000000000
+    mean = [0]*512
+    file_count = 0
+    for f in os.listdir(batch_dir):
+        npz = np.load(os.path.join(batch_dir, f))
+        big_arr = npz['arr_0']
+        for i in xrange(0, big_arr.shape[0], 2):
+            im_feats = big_arr[i]
+            if np.amin(im_feats) < min_val:
+                min_val = np.amin(im_feats)
+            if np.amax(im_feats) > max_val:
+                max_val = np.amin(im_feats)
+            assert im_feats.shape[1] == 512
+            for j in xrange(im_feats.shape[1]):
+                mean[j] += np.mean(im_feats[:,j])
+
+    mean = [i / float(file_count) for i in mean]
+
+    #Now center and normalize the data
+    for f in os.listdir(batch_dir):
+        npz = np.load(os.path.join(batch_dir, f))
+        big_arr = npz['arr_0']
+        for i in xrange(0, big_arr.shape[0], 2):
+            for j in xrange(big_arr[i]):
+                #Subtract the mean per channel
+                big_arr[i][:,j] -= mean[j] 
+            #Divide by the max
+            big_arr[i] *= (1./max_val)
+        #Save out big arr to the corresponding file again
+        np.savez(os.path.join(batch_dir, f), big_arr)
+
 #When the vocab is built, the first entry is the index and the second entry is
 #a count indicating how many times that word appears in the vocabulary
 def buildVocab(sg_dict):
@@ -315,6 +349,7 @@ def toNPZ(path_to_data, vgg_tf_model):
         save_list[::2] = feat_list
         save_list[1::2] = cap_list
         np.savez(path_to_batch_file, save_list)
+    normalizeFeatures(os.path.join(path_to_data, "batches/"))
 
 
 if __name__ == "__main__":
