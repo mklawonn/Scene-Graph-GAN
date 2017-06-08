@@ -13,8 +13,8 @@ from itertools import izip_longest
 from tqdm import tqdm
 
 def computeImageMean(image_dir):
-    if os.path.exists("image_mean.txt"):
-        means = open("image_mean.txt", "r").read().strip().split()
+    if os.path.exists("./preprocessing/image_mean.txt"):
+        means = open("./preprocessing/image_mean.txt", "r").read().strip().split()
         r_mean = float(means[0])
         g_mean = float(means[1])
         b_mean = float(means[2])
@@ -46,50 +46,60 @@ def computeImageMean(image_dir):
     g_mean = g_total / float(num_images)
     b_mean = b_total / float(num_images)
 
-    with open("image_mean.txt", "w") as f:
+    with open("./preprocessing/image_mean.txt", "w") as f:
         f.write("{} {} {}".format(r_mean, g_mean, b_mean))
 
     return r_mean, g_mean, b_mean
 
-def normalizeFeatures(batch_dir):
+#TODO Must adapt to work on both conv and fc features
+def normalizeFeatures(batch_dir, which_to_extract = "conv"):
+    if which_to_extract != "conv":
+        print "Feature extraction mode {} is not currently supported".format(which_to_extract)
+        sys.exit(1)
+
     #Go through all batches once and calculate the min, max, and means
-    max_val = 0
-    min_val = 10000000000
-    mean = [0]*512
-    file_count = 0
+    print "Calculating feature statistics"
+    mean = np.zeros((512))
+    std_dev = np.zeros((512))
+    file_count = 0.0
     for f in os.listdir(batch_dir):
         npz = np.load(os.path.join(batch_dir, f))
         big_arr = npz['arr_0']
+        num_ims = 0.0
+        temp_mean = np.zeros((512))
+        temp_std_dev = np.zeros((512))
         for i in xrange(0, big_arr.shape[0], 2):
+            #Im feats is 196 x 512 when conv is selected
             im_feats = big_arr[i]
-            if np.amin(im_feats) < min_val:
-                min_val = np.amin(im_feats)
-            if np.amax(im_feats) > max_val:
-                max_val = np.amin(im_feats)
-            assert im_feats.shape[1] == 512
-            for j in xrange(im_feats.shape[1]):
-                mean[j] += np.mean(im_feats[:,j])
+            #Calculate the per channel mean
+            temp_mean = temp_mean + np.mean(im_feats, axis=0)
+            #Calculate the per channel std deviation
+            temp_std_dev = temp_std_dev + np.std(im_feats, axis=0)
+            num_ims += 1.0
+        mean = mean + temp_mean
+        std_dev = std_dev + temp_std_dev
+        file_count += 1.0
+            
+    mean = mean / file_count
+    std_dev = std_dev / file_count
+    print "Done"
 
-    mean = [i / float(file_count) for i in mean]
-
+    print "Normalizing features"
     #Now center and normalize the data
     for f in os.listdir(batch_dir):
         npz = np.load(os.path.join(batch_dir, f))
         big_arr = npz['arr_0']
         for i in xrange(0, big_arr.shape[0], 2):
-            for j in xrange(big_arr[i]):
-                #Subtract the mean per channel
-                big_arr[i][:,j] -= mean[j] 
-            #Divide by the max
-            big_arr[i] *= (1./max_val)
-        #Save out big arr to the corresponding file again
+            big_arr[i] -= mean
+            big_arr[i] *= (1./std_dev)
         np.savez(os.path.join(batch_dir, f), big_arr)
+    print "Done"
 
 #When the vocab is built, the first entry is the index and the second entry is
 #a count indicating how many times that word appears in the vocabulary
 def buildVocab(sg_dict):
-    if os.path.exists("./vocab.json"):
-        with open("./vocab.json", "r") as f:
+    if os.path.exists("./preprocessing/vocab.json"):
+        with open("./preprocessing/vocab.json", "r") as f:
             vocab = json.load(f)
         return vocab
     vocab = {}
@@ -147,7 +157,7 @@ def pruneVocab(vocab, threshold=10):
     for k,v  in vocab.items():
         if v[1] < threshold:
             del vocab[k]
-    with open("./vocab.json", "w") as f:
+    with open("./preprocessing/vocab.json", "w") as f:
         json.dump(vocab, f)
 
 def reIndexVocab(vocab):
@@ -155,7 +165,7 @@ def reIndexVocab(vocab):
     for item in vocab:
         vocab[item][0] = i
         i += 1
-    with open("./vocab.json", "w") as f:
+    with open("./preprocessing/vocab.json", "w") as f:
         json.dump(vocab, f)
 
 #For a single scene graph, return the attribute and relationship triples
@@ -215,11 +225,11 @@ def smoothAndNormalizeImg(im, r_mean, g_mean, b_mean):
     im[:,:,0] -= r_mean
     im[:,:,1] -= g_mean
     im[:,:,2] -= b_mean
-    im = filters.gaussian_filter(im, 2, mode='nearest')
+    #im = filters.gaussian_filter(im, 2, mode='nearest')
     return im
  
 
-def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = 128):
+def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = 128, which_to_extract = "conv"):
     path_to_data += "/" if path_to_data[-1] != "/" else ""
     #Iterate over chunk_sized groups of images, generating features and yielding them
     #along with the attributes and relationships of the image
@@ -271,9 +281,17 @@ def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means
             feed_dict = { im_placeholder:np.array(images, dtype=np.float32) }
             """for f in [n.name for n in tf.get_default_graph().as_graph_def().node]:
                 print f"""
-            feat_tensor = graph.get_tensor_by_name("import/conv5_3/conv5_3:0")
+            if which_to_extract == "conv":
+                feat_tensor = graph.get_tensor_by_name("import/conv5_3/conv5_3:0")
+            elif which_to_extract == "fc":
+                feat_tensor = graph.get_tensor_by_name("import/fc7_relu:0")
+            else:
+                print "Error! Invalid feature extraction arg \"{}\"".format(which_to_extract)
+                sys.exit(1)
             feats = sess.run(feat_tensor, feed_dict = feed_dict)
-        feats = np.reshape(feats, (feats.shape[0], -1, feats.shape[3]))
+        #Reshape convolutional features from 14 x 14 x 512 per image to 196 x 512
+        if which_to_extract == "conv":
+            feats = np.reshape(feats, (feats.shape[0], -1, feats.shape[3]))
         #feats = np.array(feats, dtype=np.float32)
         #Each of these should contain the full chunk_size elements
         #Except for when the generator runs out of files
@@ -289,7 +307,7 @@ def enoughElements(sg_dict, im_id, vocab):
     attributes, relations = parseSceneGraph(sg_dict[im_id], vocab)
     return (len(attributes) + len(relations)) >= 10
 
-def toNPZ(path_to_data, vgg_tf_model):
+def toNPZ(path_to_data, vgg_tf_model, which_to_extract="conv"):
     path_to_data += "/" if path_to_data[-1] != "/" else ""
     path_to_images = path_to_data + "all_images/"
     print "Computing Image Mean"
@@ -315,6 +333,11 @@ def toNPZ(path_to_data, vgg_tf_model):
     print "Size of vocabulary after pruning"
     print len(vocab)
 
+    """image_files_dict_path = "./preprocessing/image_file_list.json"
+    if os.path.exists(image_files_dict_path):
+        with open(image_files_dict_path, "r") as f:
+            image_files = json.load(f)
+    else:"""
     #Has to be a dict rather than a list because certain im_ids might not have associated scene graphs
     #If a list were used it could results in list index out of range errors
     #We're filtering out grayscale images
@@ -326,6 +349,9 @@ def toNPZ(path_to_data, vgg_tf_model):
         if not enoughElements(sg_dict, im_id, vocab):
             bad.append(im_id)
     image_files = {im_id:image_files[im_id] for im_id in image_files if im_id not in bad}
+    """#TODO Definitely save this image_files dict
+        with open(image_files_dict_path, "w") as f:
+            json.dump(image_files, f)"""
     print "Done"
 
     print "Reading in tensorflow model"
@@ -336,12 +362,14 @@ def toNPZ(path_to_data, vgg_tf_model):
     #Note that any batch significantly larger than 128 might cause a GPU OOM
     #e.g on a 12GB Titan X a batch size of 256 was too big
     batch_size = 128
-    im_generator = imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = batch_size)
+    im_generator = imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = batch_size, which_to_extract = which_to_extract)
     print "Done"
     count = 0
     path_to_data += "/" if path_to_data[-1] != "/" else ""
     for image_feats, id_batch, att_rels_batch in im_generator:
         path_to_batch_file = "{}batches/batch_{}.npz".format(path_to_data, count)
+        if which_to_extract == "conv":
+            path_to_batch_file = "{}conv_batches/batch_{}.npz".format(path_to_data, count)
         count += 1
         feat_list = [i for i in image_feats]
         cap_list = [np.array(i) for i in att_rels_batch]
@@ -349,7 +377,10 @@ def toNPZ(path_to_data, vgg_tf_model):
         save_list[::2] = feat_list
         save_list[1::2] = cap_list
         np.savez(path_to_batch_file, save_list)
-    normalizeFeatures(os.path.join(path_to_data, "batches/"))
+    if which_to_extract == "conv":
+        normalizeFeatures(os.path.join(path_to_data, "conv_batches/"), which_to_extract=which_to_extract)
+    else:
+        normalizeFeatures(os.path.join(path_to_data, "batches/"), which_to_extract=which_to_extract)
 
 
 if __name__ == "__main__":
@@ -365,4 +396,5 @@ if __name__ == "__main__":
 
     #vgg_tf_model = "/home/user/misc_github_projects/Scene-Graph-GAN/models/vgg/vgg16.tfmodel"
     #path_to_data = "/home/user/data/visual_genome/"
-    toNPZ(path_to_data, vgg_tf_model)
+    toNPZ(path_to_data, vgg_tf_model, which_to_extract="conv")
+    #toNPZ(path_to_data, vgg_tf_model, which_to_extract="fc")

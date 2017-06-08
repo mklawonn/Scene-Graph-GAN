@@ -14,8 +14,8 @@ import tflib.ops.conv1d
 import tflib.plot
 
 from tqdm import tqdm
-from generator import Generator
-from discriminator import Discriminator
+from architectures.generator_with_attention_2 import Generator
+from architectures.discriminator_with_attention import Discriminator
 from subprocess import call
 
 
@@ -26,8 +26,8 @@ class SceneGraphWGAN(object):
         self.path_to_vocab_json = path_to_vocab_json
         self.path_to_vocab_json += "/" if self.path_to_vocab_json != "/" else ""
         self.logs_dir = "./logs/"
-        self.checkpoints_dir = os.path.join(self.logs_dir, "checkpoints/")
-        self.summaries_dir = os.path.join(self.logs_dir, "summaries/")
+        self.checkpoints_dir = os.path.join(self.logs_dir, "checkpoints_2/")
+        self.summaries_dir = os.path.join(self.logs_dir, "summaries_2/")
 
         if not os.path.exists(self.checkpoints_dir):
             os.makedirs(self.checkpoints_dir)
@@ -36,7 +36,7 @@ class SceneGraphWGAN(object):
             os.makedirs(self.summaries_dir)
 
         
-        call(["rm", "{}*".format(self.summaries_dir)])
+        #call(["rm", "{}*".format(self.summaries_dir)])
 
         #Calculating vocabulary and sequence lengths
         with open(path_to_vocab_json, "r") as f:
@@ -47,6 +47,7 @@ class SceneGraphWGAN(object):
 
         #Image feature dimensionality
         self.image_feat_dim = [196, 512]
+        #self.image_feat_dim = 4096
 
         #Hyperparameters
         self.BATCH_SIZE = BATCH_SIZE
@@ -57,60 +58,19 @@ class SceneGraphWGAN(object):
 
         #Initialize all the generator and discriminator variables
         with tf.variable_scope("Generator") as scope:
-            self.g = Generator(self.vocab_size, n_lstm_steps = self.seq_len, batch_size = self.BATCH_SIZE)
+            self.g = Generator(self.vocab_size, batch_size = self.BATCH_SIZE)
 
         with tf.variable_scope("Discriminator") as scope:
             self.d = Discriminator(self.vocab_size, batch_size = self.BATCH_SIZE)
 
-    def softmax(self, logits):
-        return tf.reshape(
-            tf.nn.softmax(
-                tf.reshape(logits, [-1, self.vocab_size])
-            ),
-            tf.shape(logits)
-        )
-
-    def make_noise(self, shape):
-        return tf.random_normal(shape)
-
-    def ResBlock(self, name, inputs):
-        output = inputs
-        output = tf.nn.relu(output)
-        output = lib.ops.conv1d.Conv1D(name+'.1', self.DIM, self.DIM, 5, output)
-        output = tf.nn.relu(output)
-        output = lib.ops.conv1d.Conv1D(name+'.2', self.DIM, self.DIM, 5, output)
-        return inputs + (0.3*output)
-
     def Generator(self, n_samples, image_feats, prev_outputs=None):
-        #noise_dim = 128
-        #output = self.make_noise(shape=[n_samples, noise_dim])
-        #output = lib.ops.linear.Linear('Generator.Input', noise_dim, self.seq_len*self.DIM, output)
-        #output = tf.reshape(output, [-1, self.DIM, self.seq_len])
-        #output = self.ResBlock('Generator.1', output)
-        #output = self.ResBlock('Generator.2', output)
-        #output = self.ResBlock('Generator.3', output)
-        #output = self.ResBlock('Generator.4', output)
-        #output = self.ResBlock('Generator.5', output)
-        #output = lib.ops.conv1d.Conv1D('Generator.Output', self.DIM, self.vocab_size, 1, output)
-        #output = tf.transpose(output, [0, 2, 1])
-        #output = self.softmax(output)
-        #return output
+        print "Building Generator"
         with tf.variable_scope("Generator", reuse=True) as scope:
-            #g = Generator(self.vocab_size, n_lstm_steps = self.seq_len, batch_size = self.BATCH_SIZE)
             generated_words = self.g.build_generator(image_feats)
             return generated_words
 
     def Discriminator(self, triple_input, image_feats):
-        #output = tf.transpose(triple_input, [0,2,1])
-        #output = lib.ops.conv1d.Conv1D('Discriminator.Input', self.vocab_size, self.DIM, 1, output)
-        #output = self.ResBlock('Discriminator.1', output)
-        #output = self.ResBlock('Discriminator.2', output)
-        #output = self.ResBlock('Discriminator.3', output)
-        #output = self.ResBlock('Discriminator.4', output)
-        #output = self.ResBlock('Discriminator.5', output)
-        #output = tf.reshape(output, [-1, self.seq_len*self.DIM])
-        #output = lib.ops.linear.Linear('Discriminator.Output', self.seq_len*self.DIM, 1, output)
-        #return output
+        print "Building Discriminator"
         with tf.variable_scope("Discriminator", reuse=True) as scope:
             logits = self.d.build_discriminator(image_feats, triple_input)
             return logits
@@ -120,6 +80,8 @@ class SceneGraphWGAN(object):
         #real_inputs = tf.one_hot(real_inputs_discrete, len(charmap))
         self.real_inputs = tf.placeholder(tf.float32, shape=[None, self.seq_len, self.vocab_size])
         self.image_feats = tf.placeholder(tf.float32, shape=[None, self.image_feat_dim[0], self.image_feat_dim[1]])
+        #self.real_inputs = tf.placeholder(tf.float32, shape=[None, self.seq_len, self.vocab_size])
+        #self.image_feats = tf.placeholder(tf.float32, shape=[None, self.image_feat_dim])
         fake_inputs = self.Generator(self.BATCH_SIZE, self.image_feats)
         fake_inputs_discrete = tf.argmax(fake_inputs, fake_inputs.get_shape().ndims-1)
 
@@ -131,8 +93,8 @@ class SceneGraphWGAN(object):
         disc_cost = tf.reduce_mean(disc_fake) - tf.reduce_mean(disc_real)
         gen_cost = -tf.reduce_mean(disc_fake)
 
-        tf.summary.scalar("Discriminator Cost", disc_cost)
-        tf.summary.scalar("Generator Cost", gen_cost)
+        #tf.summary.scalar("Discriminator Cost", disc_cost)
+        #tf.summary.scalar("Generator Cost", gen_cost)
 
         # WGAN lipschitz-penalty
         alpha = tf.random_uniform(
@@ -154,24 +116,26 @@ class SceneGraphWGAN(object):
         gen_params = [v for v in train_variables if v.name.startswith("Generator")]
         disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
 
-        optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
+        assert len(disc_params) > 0
 
-        gen_grads = optimizer.compute_gradients(gen_cost, var_list=gen_params)
-        disc_grads = optimizer.compute_gradients(disc_cost, var_list=disc_params)
+        #optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
 
-        #self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=gen_params)
-        #self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=disc_params)
+        #gen_grads = optimizer.compute_gradients(gen_cost, var_list=gen_params)
+        #disc_grads = optimizer.compute_gradients(disc_cost, var_list=disc_params)
 
-        self.gen_train_op = optimizer.apply_gradients(gen_grads)
-        self.disc_train_op = optimizer.apply_gradients(disc_grads)
+        self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=gen_params)
+        self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=disc_params)
 
-        for grad, var in gen_grads:
+        #self.gen_train_op = optimizer.apply_gradients(gen_grads)
+        #self.disc_train_op = optimizer.apply_gradients(disc_grads)
+
+        """for grad, var in gen_grads:
             if grad is not None:
                 tf.summary.histogram(var.op.name + "/gradient", grad)
 
         for grad, var in disc_grads:
             if grad is not None:
-                tf.summary.histogram(var.op.name + "/gradient", grad)
+                tf.summary.histogram(var.op.name + "/gradient", grad)"""
 
     def DataGenerator(self):
         filenames = ["{}{}".format(self.batch_path, i) for i in os.listdir(self.batch_path)]
@@ -211,11 +175,11 @@ class SceneGraphWGAN(object):
     def Train(self, epochs):
         self.saver = tf.train.Saver()
         self.Loss()
-        summary_op = tf.summary.merge_all()
+        #summary_op = tf.summary.merge_all()
         start_time = time.time()
         with tf.Session() as session:
             #self.generateSamples(session)
-            writer = tf.summary.FileWriter(self.summaries_dir, session.graph)
+            #writer = tf.summary.FileWriter(self.summaries_dir, session.graph)
 
 
             session.run(tf.global_variables_initializer())
@@ -248,24 +212,25 @@ class SceneGraphWGAN(object):
                             feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch}
                         )
 
-                    if iteration % 5 == 0:
+                    if iteration % 200 == 0:
 
-                        """stop_time = time.time()
+                        stop_time = time.time()
                         duration = (stop_time - start_time) / 200.0
-                        start_time = stop_time"""
-                        summary, _gen_cost = session.run([summary_op, self.gen_cost], feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch})
-                        writer.add_summary(summary, iteration)
-                        writer.flush()
+                        start_time = stop_time
+                        #summary, _gen_cost = session.run([summary_op, self.gen_cost], feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch})
+                        _gen_cost = session.run(self.gen_cost, feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch})
+                        #writer.add_summary(summary, iteration)
+                        #writer.flush()
 
-                        """print "Time {}/itr, Step: {}, generator loss: {}, discriminator loss: {}".format(
-                                duration, iteration, _gen_cost, _disc_cost)"""
+                        print "Time {}/itr, Step: {}, generator loss: {}, discriminator loss: {}".format(
+                                duration, iteration, _gen_cost, _disc_cost)
 
-                    if iteration % 25 == 0:
+                    if iteration % 1000 == 0:
                         samples = []
                         for i in xrange(10):
                             samples.extend(generate_samples(im_batch))
 
-                        with open('./samples/samples_{}.txt'.format(iteration), 'w') as f:
+                        with open('./samples/samples_2/samples_{}.txt'.format(iteration), 'w') as f:
                             for s in samples:
                                 s = " ".join(s)
                                 f.write(s + "\n")
@@ -281,7 +246,7 @@ if __name__ == "__main__":
         for line in f:
             line_ = line.split()
             arg_dict[line_[0]] = line_[1]
-    batch_path = "{}{}".format(arg_dict["visual_genome"], "batches")
+    batch_path = "{}{}".format(arg_dict["visual_genome"], "conv_batches")
     path_to_vocab_json = arg_dict["vocab"]
     logs_dir = arg_dict["logs"]
     BATCH_SIZE = 64
