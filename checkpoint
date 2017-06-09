@@ -1,4 +1,0 @@
-model_checkpoint_path: "./logs/model.ckpt-10000"
-all_model_checkpoint_paths: "./logs/model.ckpt-0"
-all_model_checkpoint_paths: "./logs/model.ckpt-5000"
-all_model_checkpoint_paths: "./logs/model.ckpt-10000"
