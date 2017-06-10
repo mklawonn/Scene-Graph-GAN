@@ -2,14 +2,14 @@ import tensorflow as tf
 
 class Generator(object):
 
-    def __init__(self, vocab_size, dim_context=4096, seq_len = 3, dim_hidden=512, batch_size=64):
+    def __init__(self, vocab_size, dim_context=[196, 512], seq_len = 3, dim_hidden=512, batch_size=64):
 
         self.vocab_size = vocab_size
         self.dim_context = dim_context
         self.dim_hidden = dim_hidden
         self.batch_size = batch_size
         self.seq_len = seq_len
-        self.noise_dim = dim_context
+        self.noise_dim = dim_hidden*2
 
         xavier_initializer = tf.contrib.layers.xavier_initializer()
         he_initializer = tf.contrib.layers.variance_scaling_initializer()
@@ -17,14 +17,18 @@ class Generator(object):
 
 
         #Embed the input
-        self.context_embed_W = tf.get_variable("context_embed_W", [dim_context+self.noise_dim, dim_hidden*2], initializer=he_initializer)
+        self.context_embed_W = tf.get_variable("context_embed_W", [dim_context[0]*dim_context[1], dim_hidden*2], initializer=he_initializer)
         self.context_embed_b = tf.get_variable("context_embed_b", [dim_hidden*2], initializer=constant_initializer)
 
-        self.context_embed_W2 = tf.get_variable("context_embed_W2", [dim_hidden*2, seq_len*dim_hidden], initializer=he_initializer)
-        self.context_embed_b2 = tf.get_variable("context_embed_b2", [seq_len*dim_hidden], initializer=constant_initializer)
+        self.att_W = tf.get_variable("att_W", [dim_hidden*2 + self.noise_dim, dim_context[0]], initializer = he_initializer)
+        self.att_b = tf.get_variable("att_b", [dim_context[0]], initializer = constant_initializer)
 
-        #3x3 Filters with a stride of 1
-        self.conv_1_1 = tf.get_variable("conv_1_1", [3,dim_hidden,dim_hidden], initializer=he_initializer)
+        self.sequence_W = tf.get_variable("sequence_W", [dim_context[1], dim_context[1]*seq_len], initializer=he_initializer)
+        self.sequence_b = tf.get_variable("sequence_b", [dim_context[1]*seq_len], initializer=constant_initializer)
+
+        #Filters of size 2, to be used with a stride of 1
+        #TODO Does this only work if dim_context[1] and dim_hidden are equal? I think so ...
+        self.conv_1_1 = tf.get_variable("conv_1_1", [3,dim_context[1],dim_hidden], initializer=he_initializer)
         self.conv_1_2 = tf.get_variable("conv_1_2", [3,dim_hidden,dim_hidden], initializer=he_initializer)
 
         self.conv_2_1 = tf.get_variable("conv_2_1", [3,dim_hidden,dim_hidden], initializer=he_initializer)
@@ -41,46 +45,30 @@ class Generator(object):
 
         self.output_conv = tf.get_variable("output_conv", [1,dim_hidden,vocab_size], initializer=he_initializer)
 
-        
-    def ResBlock(self, inputs):
-        output = inputs
-        output = tf.nn.relu(output)
-        output = lib.ops.conv1d.Conv1D(name+'.1', self.DIM, self.DIM, 5, output)
-        output = tf.nn.relu(output)
-        output = lib.ops.conv1d.Conv1D(name+'.2', self.DIM, self.DIM, 5, output)
-        return inputs + (0.3*output)
-
-    def Generator(self, n_samples, image_feats, prev_outputs=None):
-        noise_dim = 1024
-        #output = self.make_noise(shape=[n_samples, noise_dim])
-        noise = self.make_noise(shape=[n_samples, noise_dim])
-        output = tf.concat([image_feats, noise], axis=1)
-        output = lib.ops.linear.Linear('Generator.Input', noise_dim+self.image_feat_dim, self.seq_len*self.DIM, output)
-        output = tf.reshape(output, [-1, self.DIM, self.seq_len])
-        output = self.ResBlock('Generator.1', output)
-        output = self.ResBlock('Generator.2', output)
-        output = self.ResBlock('Generator.3', output)
-        output = self.ResBlock('Generator.4', output)
-        output = self.ResBlock('Generator.5', output)
-        output = lib.ops.conv1d.Conv1D('Generator.Output', self.DIM, self.vocab_size, 1, output)
-        output = tf.transpose(output, [0, 2, 1])
-        output = self.softmax(output)
-        return output
-
-
     def build_generator(self, context):
         noise = tf.random_uniform([self.batch_size, self.noise_dim])
 
-        context_noise_concatenated = tf.concat([context, noise], axis=1)
+        flattened_context = tf.reshape(context, [self.batch_size, self.dim_context[0]*self.dim_context[1]])
+        embedded_context = tf.add(tf.matmul(flattened_context, self.context_embed_W), self.context_embed_b)
 
-        context_encode = tf.add(tf.matmul(context_noise_concatenated, self.context_embed_W), self.context_embed_b)
-        #context_encode = tf.nn.relu(context_encode)
+        context_and_noise = tf.concat([embedded_context, noise], axis=1)
 
-        context_encode = tf.add(tf.matmul(context_encode, self.context_embed_W2), self.context_embed_b2)
-        #context_encode = tf.nn.relu(context_encode)
+        #Begin attention operation
+        #z_hat represents a weighted summation across all features of the image
+        #The alphas are the weights giving relative importance to each feature of the image
+        #The alphas are generated by a single layer perceptron (att_W and att_b) which
+        #determine what parts of the image are important based on the image features and the
+        #random noise
+        e = tf.add(tf.matmul(context_and_noise, self.att_W), self.att_b)
 
-        resnet_input = tf.reshape(context_encode, [-1, self.dim_hidden, self.seq_len])
-        
+        alpha = tf.nn.softmax(e)
+        #alpha = tf.contrib.distributions.RelaxedOneHotCategorical(self.soft_gumbel_temp, logits=e).sample()
+        z_hat = tf.reduce_sum(tf.multiply(context, tf.expand_dims(alpha, 2)), axis = 1) #Output is [batch_size, dim_context[1]]
+
+        #In order to generate a sequence from this z_hat, 
+        #expand z_hat to be sequence_length*dim_context[1], then reshape
+        resnet_input = tf.add(tf.matmul(z_hat, self.sequence_W), self.sequence_b)
+        resnet_input = tf.reshape(resnet_input, [-1, self.dim_context[1], self.seq_len])
 
         #Begin resnet operations
         output = resnet_input
@@ -122,5 +110,5 @@ class Generator(object):
         output = tf.nn.conv1d(value = output, filters=self.output_conv, stride=1, padding='SAME', data_format='NCHW')
         #Rearrange into batch_size, seq_len, vocab_size output
         output = tf.transpose(output, [0, 2, 1])
-        output = self.softmax(output)
+        output = tf.nn.softmax(output)
         return output

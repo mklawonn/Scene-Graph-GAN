@@ -14,8 +14,10 @@ import tflib.ops.conv1d
 import tflib.plot
 
 from tqdm import tqdm
-from architectures.generator_with_attention_2 import Generator
-from architectures.discriminator_with_attention import Discriminator
+#from architectures.generator_with_attention_2 import Generator
+#from architectures.discriminator_with_attention import Discriminator
+from architectures.conv1D_generator import Generator
+from architectures.conv1D_discriminator import Discriminator
 from subprocess import call
 
 
