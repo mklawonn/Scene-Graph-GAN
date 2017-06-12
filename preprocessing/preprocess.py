@@ -51,19 +51,16 @@ def computeImageMean(image_dir):
 
     return r_mean, g_mean, b_mean
 
-#TODO Must adapt to work on both conv and fc features
-def normalizeFeatures(batch_dir, which_to_extract = "conv"):
-    if which_to_extract != "conv":
-        print "Feature extraction mode {} is not currently supported".format(which_to_extract)
-        sys.exit(1)
-
+def normalizeFeatures(train_path, batch_dir):
     #Go through all batches once and calculate the min, max, and means
     print "Calculating feature statistics"
     mean = np.zeros((512))
     std_dev = np.zeros((512))
     file_count = 0.0
-    for f in os.listdir(batch_dir):
-        npz = np.load(os.path.join(batch_dir, f))
+    for f in os.listdir(train_path):
+        if f[-4:] != ".npz":
+            continue
+        npz = np.load(os.path.join(train_path, f))
         big_arr = npz['arr_0']
         num_ims = 0.0
         temp_mean = np.zeros((512))
@@ -87,6 +84,8 @@ def normalizeFeatures(batch_dir, which_to_extract = "conv"):
     print "Normalizing features"
     #Now center and normalize the data
     for f in os.listdir(batch_dir):
+        if f[-4:] != ".npz":
+            continue
         npz = np.load(os.path.join(batch_dir, f))
         big_arr = npz['arr_0']
         for i in xrange(0, big_arr.shape[0], 2):
@@ -218,18 +217,14 @@ def readInTensorflowModel(vgg_tf_model):
 
     return graph_def
 
-
-    #return graph
-
 def smoothAndNormalizeImg(im, r_mean, g_mean, b_mean):
     im[:,:,0] -= r_mean
     im[:,:,1] -= g_mean
     im[:,:,2] -= b_mean
     #im = filters.gaussian_filter(im, 2, mode='nearest')
     return im
- 
 
-def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = 128, which_to_extract = "conv"):
+def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = 128):
     path_to_data += "/" if path_to_data[-1] != "/" else ""
     #Iterate over chunk_sized groups of images, generating features and yielding them
     #along with the attributes and relationships of the image
@@ -279,19 +274,10 @@ def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means
             init = tf.global_variables_initializer()
             sess.run(init)
             feed_dict = { im_placeholder:np.array(images, dtype=np.float32) }
-            """for f in [n.name for n in tf.get_default_graph().as_graph_def().node]:
-                print f"""
-            if which_to_extract == "conv":
-                feat_tensor = graph.get_tensor_by_name("import/conv5_3/conv5_3:0")
-            elif which_to_extract == "fc":
-                feat_tensor = graph.get_tensor_by_name("import/fc7_relu:0")
-            else:
-                print "Error! Invalid feature extraction arg \"{}\"".format(which_to_extract)
-                sys.exit(1)
+            feat_tensor = graph.get_tensor_by_name("import/conv5_3/conv5_3:0")
             feats = sess.run(feat_tensor, feed_dict = feed_dict)
         #Reshape convolutional features from 14 x 14 x 512 per image to 196 x 512
-        if which_to_extract == "conv":
-            feats = np.reshape(feats, (feats.shape[0], -1, feats.shape[3]))
+        feats = np.reshape(feats, (feats.shape[0], -1, feats.shape[3]))
         #feats = np.array(feats, dtype=np.float32)
         #Each of these should contain the full chunk_size elements
         #Except for when the generator runs out of files
@@ -307,19 +293,46 @@ def enoughElements(sg_dict, im_id, vocab):
     attributes, relations = parseSceneGraph(sg_dict[im_id], vocab)
     return (len(attributes) + len(relations)) >= 10
 
-def toNPZ(path_to_data, vgg_tf_model, which_to_extract="conv"):
+def genAndSaveImFeats(path_to_data, path_to_images, image_files, sg_dict, tf_graph, image_means, vocab, batch_size, batch_path, train = True):
+    print "Creating image generator"
+    im_generator = imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = batch_size)
+    print "Done"
+    count = 0
+    for image_feats, id_batch, att_rels_batch in im_generator:
+        path_to_batch_file = os.path.join(batch_path, "batch_{}.npz".format(count))
+        count += 1
+        feat_list = [i for i in image_feats]
+        cap_list = [np.array(i) for i in att_rels_batch]
+        save_list = [None]*(len(feat_list)+len(cap_list))
+        save_list[::2] = feat_list
+        save_list[1::2] = cap_list
+        np.savez(path_to_batch_file, save_list)
+        #Do some extra steps for the eval step
+        if not train and count == 0:
+            #Do this for just the first batch 
+            filenames = [os.path.join(path_to_images, "{}.jpg".format(id)) for id in id_batch]
+            #Create filename to feats dictionary if it doesn't exist
+            path_to_dict = os.path.join(batch_path, "filename_to_feats_dict.json")
+            #Have to go back later and change the dictionary to use the normalized features
+            path_to_filenames = os.path.join(batch_path, "filenames.txt"), 'r')
+            #Create list of filenames if it doesn't exist
+            with open(path_to_filenames, "w") as f:
+                for name in filenames:
+                    f.write(name + "\n")
+
+def toNPZ(path_to_data, vgg_tf_model):
     path_to_data += "/" if path_to_data[-1] != "/" else ""
-    path_to_images = path_to_data + "all_images/"
+    path_to_images = os.path.join(path_to_data, "all_images/")
     print "Computing Image Mean"
+    #TODO Fix the data snooping (shouldn't matter too much)
     r_mean, g_mean, b_mean = computeImageMean(path_to_images)
     image_means = [r_mean, g_mean, b_mean]
     print "Done"
 
-    print "Creating list of files which have a scene graph,\
-         excluding grayscale and images with less than 10 combined relations and attributes"
+    print "Creating a list of files which have a scene graph"
     with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
         sg_dict = {sg['image_id']:sg for sg in json.load(f)}
-    #TODO: Save this sg_dict?
+    print "Done"
 
     print "Building vocabulary"
     vocab = buildVocab(sg_dict)
@@ -333,11 +346,7 @@ def toNPZ(path_to_data, vgg_tf_model, which_to_extract="conv"):
     print "Size of vocabulary after pruning"
     print len(vocab)
 
-    """image_files_dict_path = "./preprocessing/image_file_list.json"
-    if os.path.exists(image_files_dict_path):
-        with open(image_files_dict_path, "r") as f:
-            image_files = json.load(f)
-    else:"""
+    print "Now removing grayscale images and images with less than 10 combined relations and attributes"
     #Has to be a dict rather than a list because certain im_ids might not have associated scene graphs
     #If a list were used it could results in list index out of range errors
     #We're filtering out grayscale images
@@ -349,39 +358,42 @@ def toNPZ(path_to_data, vgg_tf_model, which_to_extract="conv"):
         if not enoughElements(sg_dict, im_id, vocab):
             bad.append(im_id)
     image_files = {im_id:image_files[im_id] for im_id in image_files if im_id not in bad}
-    """#TODO Definitely save this image_files dict
-        with open(image_files_dict_path, "w") as f:
-            json.dump(image_files, f)"""
+    print "Done"
+
+    print "Splitting into training and eval"
+    training_files = dict(image_files.items()[len(image_files)/20:])
+    eval_files = dict(image_files.items()[:len(image_files)/20])
+
+    #Sanity check
+    assert len(training_files) > len(eval_files)
     print "Done"
 
     print "Reading in tensorflow model"
     tf_graph = readInTensorflowModel(vgg_tf_model)
     print "Done"
 
-    print "Creating image generator"
+    #Create directory for training batches and eval batches
+    train_path = os.path.join(path_to_data, "batches/train")
+    eval_path = os.path.join(path_to_data, "batches/eval")
+
+    if not os.path.exists(train_path):
+        os.makedirs(train_path)
+
+    if not os.path.exists(eval_path):
+        os.makedirs(eval_path)
+
     #Note that any batch significantly larger than 128 might cause a GPU OOM
     #e.g on a 12GB Titan X a batch size of 256 was too big
     batch_size = 128
-    im_generator = imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = batch_size, which_to_extract = which_to_extract)
-    print "Done"
-    count = 0
-    path_to_data += "/" if path_to_data[-1] != "/" else ""
-    for image_feats, id_batch, att_rels_batch in im_generator:
-        path_to_batch_file = "{}batches/batch_{}.npz".format(path_to_data, count)
-        if which_to_extract == "conv":
-            path_to_batch_file = "{}conv_batches/batch_{}.npz".format(path_to_data, count)
-        count += 1
-        feat_list = [i for i in image_feats]
-        cap_list = [np.array(i) for i in att_rels_batch]
-        save_list = [None]*(len(feat_list)+len(cap_list))
-        save_list[::2] = feat_list
-        save_list[1::2] = cap_list
-        np.savez(path_to_batch_file, save_list)
-    if which_to_extract == "conv":
-        normalizeFeatures(os.path.join(path_to_data, "conv_batches/"), which_to_extract=which_to_extract)
-    else:
-        normalizeFeatures(os.path.join(path_to_data, "batches/"), which_to_extract=which_to_extract)
 
+    print "Generating image feats for training data"
+    genAndSaveImFeats(path_to_data, path_to_images, training_files, sg_dict, tf_graph, image_means, vocab, batch_size, batch_path, train = True):
+
+    print "Generating image feats for eval data"
+    genAndSaveImFeats(path_to_data, path_to_images, eval_files, sg_dict, tf_graph, image_means, vocab, batch_size, batch_path, train = False)
+
+    normalizeFeatures(train_path, train_path)
+    normalizeFeatures(train_path, eval_path)
 
 if __name__ == "__main__":
     with open("./config.txt", "r") as f:
@@ -394,7 +406,4 @@ if __name__ == "__main__":
 
     path_to_data += "/" if path_to_data[-1] != "/" else ""
 
-    #vgg_tf_model = "/home/user/misc_github_projects/Scene-Graph-GAN/models/vgg/vgg16.tfmodel"
-    #path_to_data = "/home/user/data/visual_genome/"
-    toNPZ(path_to_data, vgg_tf_model, which_to_extract="conv")
-    #toNPZ(path_to_data, vgg_tf_model, which_to_extract="fc")
+    toNPZ(path_to_data, vgg_tf_model)

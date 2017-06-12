@@ -14,31 +14,42 @@ import tflib.ops.conv1d
 import tflib.plot
 
 from tqdm import tqdm
-#from architectures.generator_with_attention_2 import Generator
-#from architectures.discriminator_with_attention import Discriminator
-from architectures.conv1D_generator import Generator
-from architectures.conv1D_discriminator import Discriminator
 from subprocess import call
+
+from PIL import Image
+from PIL import ImageFont
+from PIL import ImageDraw
 
 
 class SceneGraphWGAN(object):
-    def __init__(self, batch_path, path_to_vocab_json, BATCH_SIZE=64):
+    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64):
         self.batch_path = batch_path
         self.batch_path += "/" if self.batch_path[-1] != "/" else ""
         self.path_to_vocab_json = path_to_vocab_json
         self.path_to_vocab_json += "/" if self.path_to_vocab_json != "/" else ""
-        self.logs_dir = "./logs/"
-        self.checkpoints_dir = os.path.join(self.logs_dir, "checkpoints_2/")
-        self.summaries_dir = os.path.join(self.logs_dir, "summaries_2/")
+        self.configuration = "{}_gen_{}_disc".format(generator, discriminator)
+        self.logs_dir = os.path.join(logs_dir, self.configuration)
+        self.checkpoints_dir = os.path.join(self.logs_dir, "checkpoints/")
+        self.summaries_dir = os.path.join(self.logs_dir, "summaries/")
+        self.samples_dir = os.path.join(samples_dir, self.configuration)
 
         if not os.path.exists(self.checkpoints_dir):
             os.makedirs(self.checkpoints_dir)
+        else:
+            print "WARNING: Checkpoints directory already exists for {} configuration. Files will be overwritten.".format(self.configuration)
 
         if not os.path.exists(self.summaries_dir):
             os.makedirs(self.summaries_dir)
+        else:
+            print "WARNING: Summaries directory already exists for {} configuration. Files will be deleted.".format(self.configuration)
 
-        
-        #call(["rm", "{}*".format(self.summaries_dir)])
+        if not os.path.exists(self.samples_dir):
+            os.makedirs(self.samples_dir)
+        else:
+            print "WARNING: Samples directory already exists for {} configuration. Files will be overwritten.".format(self.configuration)
+
+        for f in os.listdir(self.summaries_dir):
+            call(["rm", os.path.join(self.summaries_dir, f)])
 
         #Calculating vocabulary and sequence lengths
         with open(path_to_vocab_json, "r") as f:
@@ -57,6 +68,21 @@ class SceneGraphWGAN(object):
         self.CRITIC_ITERS = 25
         self.DIM = 512
         self.ITERS = 100000
+
+        #Map architecture keywords to actual architectures
+        discriminators = { "mlp" : architectures.mlp_discriminator,
+                           "conv1D" : architectures.conv1D_discriminator,
+                           "lstm" : architectures.discriminator_with_attention
+        }
+
+        generators = { "mlp" : architectures.mlp_generator,
+                       "conv1D" : architectures.conv1D_generator,
+                       "lstm" : architectures.generator_with_attention
+        }
+
+        #Import the correct discriminator according to the keyword argument
+        from discriminators[discriminator] import Discriminator
+        from generators[generator] import Generator
 
         #Initialize all the generator and discriminator variables
         with tf.variable_scope("Generator") as scope:
@@ -118,6 +144,7 @@ class SceneGraphWGAN(object):
         gen_params = [v for v in train_variables if v.name.startswith("Generator")]
         disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
 
+        assert len(gen_params) > 0
         assert len(disc_params) > 0
 
         #optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
@@ -140,7 +167,8 @@ class SceneGraphWGAN(object):
                 tf.summary.histogram(var.op.name + "/gradient", grad)"""
 
     def DataGenerator(self):
-        filenames = ["{}{}".format(self.batch_path, i) for i in os.listdir(self.batch_path)]
+        train_path = os.path.join(self.batch_path, "train")
+        filenames = [os.path.join(train_path, i) for i in os.listdir(train_path)]
         for f in filenames:
             npz = np.load(f)
             big_arr = npz['arr_0']
@@ -162,16 +190,58 @@ class SceneGraphWGAN(object):
                 del indices[-self.BATCH_SIZE:]
                 yield im_batch, t_batch
 
-    """def generateSamples(self, session):
-        #Load features from a specific image
-        ##Load the image
-        path_to_image = "/home/mklawonn/visual_genome/all_images/0.jpg"
-        ##Extract features
-        ##Load the image in a tensor
-        #Generate triples from this image
+    #Generate samples in TensorBoard
+    #This will require that in the preprocessing phase, a small set of testing images
+    #is set aside. The extracted features will need to be mapped to the images they came
+    #from somehow. Need to figure out how to put real captions beside the generated ones. 
+    #Also potentially visualize attention here.
+    def generateSamples(self, session):
+        #For image in list in eval
+        eval_image_path = os.path.join(self.batch_path, "eval")
+        #Load the filename to feats dictionary
+        path_to_dict = os.path.join(eval_image_path, "filename_to_feats_dict.json")
+        with open(path_to_dict, 'r') as f:
+            filename_to_feats = json.load(f)
+        with open(os.path.join(eval_image_path, "filenames.txt"), 'r') as f:
+            filenames = [line.strip() for line in f]
+        list_of_images = []
+        for f in filenames:
+            #Open the file
+            img = Image.open(f)
+            #Load the corresponding features from the dictionary
+            im_feats = filename_to_feats[f]
+            #Generate some amount of triples from the features
+            samples = session.run(self.fake_inputs, feed_dice={self.image_feats : im_feats})
+            samples = np.argmax(samples, axis=2)
+            decoded_samples = []
+            #new_im will contain the original image and the text
+            new_im = Image.new('RGB', (224 + 300, 224))
+            #Resize the original image
+            img = img.resize((224, 224), Image.ANTIALIAS)
+            #Create the image on which to write the text
+            text_im = Image.new('RGB', (300, 224))
+            #Write out the text
+            draw = ImageDraw.Draw(text_im)
+            position = 0
+            for i in xrange(len(samples)):
+                decoded = []
+                for j in xrange(len(samples[i])):
+                    decoded.append(self.decoder[samples[i][j]])
+                s = " ".join(tuple(decoded))
+                draw.text((10, 5 + (10*position)), s)
+            #Paste the original image and text image together
+            new_im.paste(img, (0,0))
+            new_im.paste(text_im, (224, 0))
+            #Load the combined image as a numpy array
+            new_im.load()
+            new_im = np.array(new_im, dtype=np.float64)
+            #Append the image to a list
+            list_of_images.append(new_im)
+        #Stack the list into a tensor
+        tensorflow_images = tf.stack(list_of_images)
+        #Write out the stacked tensor to an image summary
+        tf.summary.image("generated_triples", tensorflow_images, max_outputs = 4)
         
-        #Write a summary that puts the image and ground truth in tensorboard
-        #Write a summary that puts generated triples into tensorboard"""
 
 
     def Train(self, epochs):
@@ -180,13 +250,14 @@ class SceneGraphWGAN(object):
         #summary_op = tf.summary.merge_all()
         start_time = time.time()
         with tf.Session() as session:
-            #self.generateSamples(session)
-            #writer = tf.summary.FileWriter(self.summaries_dir, session.graph)
+            self.generateSamples(session)
+            summary_op = tf.summary.merge_all()
+            writer = tf.summary.FileWriter(self.summaries_dir, session.graph)
 
 
             session.run(tf.global_variables_initializer())
 
-            def generate_samples(image_feats):
+            """def generate_samples(image_feats):
                 samples = session.run(self.fake_inputs, feed_dict={self.image_feats: image_feats})
                 samples = np.argmax(samples, axis=2)
                 decoded_samples = []
@@ -195,12 +266,17 @@ class SceneGraphWGAN(object):
                     for j in xrange(len(samples[i])):
                         decoded.append(self.decoder[samples[i][j]])
                     decoded_samples.append(tuple(decoded))
-                return decoded_samples
+                return decoded_samples"""
 
             gen = self.DataGenerator()
 
+
+            print "Training WGAN for {} epochs. To monitor training via TensorBoard, run python -m tensorflow.tensorboard --logdir {}"
+                .format(epochs, self.summaries_dir)
+
             for epoch in range(epochs):
                 iteration = 0
+                max_iteration = 0
                 for im_batch, triple_batch in self.DataGenerator():
                     #Train Generator
                     if iteration > 0:
@@ -217,43 +293,64 @@ class SceneGraphWGAN(object):
                     if iteration % 200 == 0:
 
                         stop_time = time.time()
-                        duration = (stop_time - start_time) / 200.0
+                        if iteration == 0:
+                            duration = stop_time - start_time
+                        else:
+                            duration = (stop_time - start_time) / 200.0
                         start_time = stop_time
-                        #summary, _gen_cost = session.run([summary_op, self.gen_cost], feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch})
-                        _gen_cost = session.run(self.gen_cost, feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch})
-                        #writer.add_summary(summary, iteration)
-                        #writer.flush()
+                        summary, _gen_cost = session.run([summary_op, self.gen_cost], feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch})
+                        #_gen_cost = session.run(self.gen_cost, feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch})
+                        writer.add_summary(summary, iteration)
+                        writer.flush()
 
                         print "Time {}/itr, Step: {}, generator loss: {}, discriminator loss: {}".format(
                                 duration, iteration, _gen_cost, _disc_cost)
 
                     if iteration % 1000 == 0:
-                        samples = []
+                        """samples = []
                         for i in xrange(10):
                             samples.extend(generate_samples(im_batch))
 
-                        with open('./samples/samples_2/samples_{}.txt'.format(iteration), 'w') as f:
+                        with open(os.path.join(self.samples_dir, "iteration_{}.txt".format(iteration*(epoch+1), 'w'))) as f:
                             for s in samples:
                                 s = " ".join(s)
-                                f.write(s + "\n")
+                                f.write(s + "\n")"""
+                        self.generateSamples(session)
+                        self.saver.save(session, os.path.join(self.checkpoints_dir, "model.ckpt"), global_step=(epoch*max_iteration)+iteration)
 
-                        
-                        self.saver.save(session, os.path.join(self.checkpoints_dir, "model.ckpt"), global_step=(epoch+1)*iteration)
                     iteration += 1
+                max_iteration = iteration
 
-
-if __name__ == "__main__":
+def parseConfigFile(path_to_config_file = "./config.txt"):
     arg_dict = {}
     with open("./config.txt", "r") as f:
         for line in f:
             line_ = line.split()
             arg_dict[line_[0]] = line_[1]
-    batch_path = "{}{}".format(arg_dict["visual_genome"], "conv_batches")
+    return arg_dict
+
+
+if __name__ == "__main__":
+    #"Permanent" arguments from the config file
+    arg_dict = parseConfigFile()
+    batch_path = os.path.join(arg_dict["visual_genome"], "conv_batches")
     path_to_vocab_json = arg_dict["vocab"]
     logs_dir = arg_dict["logs"]
-    BATCH_SIZE = 64
-    wgan = SceneGraphWGAN(batch_path, path_to_vocab_json, BATCH_SIZE=BATCH_SIZE)
-    #wgan.create_network()
-    #wgan.initialize_network(logs_dir)
-    #wgan.train_model(25)
-    wgan.Train(32)
+    samples_dir = arg_dict["samples"]
+
+
+    #Argparse args
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--batch_size", default=64, help="Batch size defaults to 64", type=int)
+    parser.add_argument("--generator", default="lstm", help="Generator defaults to LSTM with attention. See the architectures folder.")
+    parser.add_argument("--discriminator", default="lstm", help="Discriminator defaults to LSTM with attention. See the architectures folder.")
+    parser.add_argument("--epochs", default=30, help="Number of epochs defaults to 30", type=int)
+    parser.add_argument("--resume", default=False, help="Resume training from the last checkpoint for this configuration", type=bool)
+
+    args = parser.parse_args()
+    params = vars(args)
+
+    #Begin training
+    wgan = SceneGraphWGAN(batch_path, path_to_vocab_json, params["generator"], params["discriminator"], BATCH_SIZE=params["batch_size"])
+    wgan.Train(params["epochs"])
