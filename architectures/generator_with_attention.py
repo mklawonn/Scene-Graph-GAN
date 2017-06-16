@@ -100,9 +100,9 @@ class Generator(object):
 
             #Could make the decoding a "deep output layer" by adding another layer
             logits = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
-            word_prob = tf.nn.softmax(logits)
+            #word_prob = tf.nn.softmax(logits)
             #TODO Look at boundary GAN paper
-            #word_prob = tf.contrib.distributions.RelaxedOneHotCategorical(self.soft_gumbel_temp, logits=logits).sample()
+            word_prob = tf.contrib.distributions.RelaxedOneHotCategorical(self.soft_gumbel_temp, logits=logits).sample()
             #word_prediction = tf.argmax(logits, 1)
             l.append(word_prob)
 
