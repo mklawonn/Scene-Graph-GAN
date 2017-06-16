@@ -21,6 +21,9 @@ class Generator(object):
         #Needs to be encoded in order to combine it with the previous hidden state
         self.context_encode_W = tf.get_variable("context_encode", [self.context_shape[0]*self.context_shape[1], self.context_shape[1]*2], initializer=xavier_initializer)
 
+        self.noise_emb_W = tf.get_variable("noise_emb_W", [self.noise_dim, self.noise_dim], initializer=xavier_initializer)
+        self.noise_emb_b = tf.get_variable("noise_emb_b", [self.noise_dim], initializer=constant_initializer)
+
         self.Wemb = tf.get_variable("Wemb", [self.vocab_size, self.dim_embed], initializer=xavier_initializer)
         #Stupid stupid hack to allow an initial word embedding to be variable batch_size
         #self.zero_emb = tf.zeros([self.context_shape[1], self.dim_embed], name="zero_emb")
@@ -56,6 +59,7 @@ class Generator(object):
         encoded_context = tf.matmul(flattened_context, self.context_encode_W)
 
         noise = tf.random_uniform([batch_size, self.noise_dim])
+        embedded_noise = tf.add(tf.matmul(noise, self.noise_emb_W), self.noise_emb_b)
         h, c = self.get_initial_lstm(tf.reduce_mean(context, 1))#(batch_size, dim_hidden)
 
         l = []
@@ -69,7 +73,7 @@ class Generator(object):
                 word_emb = tf.matmul(word_prob, self.Wemb)
 
 
-            context_hidden_state_and_noise = tf.concat([encoded_context, h, noise], 1)
+            context_hidden_state_and_noise = tf.concat([encoded_context, h, embedded_noise], 1)
             e = tf.add(tf.matmul(context_hidden_state_and_noise, self.att_W), self.att_b)
             alpha = tf.nn.softmax(e)
             #alpha = tf.contrib.distributions.RelaxedOneHotCategorical(self.soft_gumbel_temp, logits=e).sample()
