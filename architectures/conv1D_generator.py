@@ -45,10 +45,10 @@ class Generator(object):
 
         self.output_conv = tf.get_variable("output_conv", [1,dim_hidden,vocab_size], initializer=he_initializer)
 
-    def build_generator(self, context):
-        noise = tf.random_uniform([self.batch_size, self.noise_dim])
+    def build_generator(self, context, batch_size):
+        noise = tf.random_uniform([batch_size, self.noise_dim])
 
-        flattened_context = tf.reshape(context, [self.batch_size, self.dim_context[0]*self.dim_context[1]])
+        flattened_context = tf.reshape(context, [-1, self.dim_context[0]*self.dim_context[1]])
         embedded_context = tf.add(tf.matmul(flattened_context, self.context_embed_W), self.context_embed_b)
 
         context_and_noise = tf.concat([embedded_context, noise], axis=1)

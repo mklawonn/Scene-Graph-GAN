@@ -4,14 +4,10 @@ sys.path.append(os.getcwd())
 import time
 import json
 import random
+import argparse
 
 import numpy as np
 import tensorflow as tf
-
-import tflib as lib
-import tflib.ops.linear
-import tflib.ops.conv1d
-import tflib.plot
 
 from tqdm import tqdm
 from subprocess import call
@@ -22,12 +18,12 @@ from PIL import ImageDraw
 
 
 class SceneGraphWGAN(object):
-    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64):
+    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64, CRITIC_ITERS=10):
         self.batch_path = batch_path
         self.batch_path += "/" if self.batch_path[-1] != "/" else ""
         self.path_to_vocab_json = path_to_vocab_json
         self.path_to_vocab_json += "/" if self.path_to_vocab_json != "/" else ""
-        self.configuration = "{}_gen_{}_disc".format(generator, discriminator)
+        self.configuration = "{}_gen_{}_disc_{}_critic".format(generator, discriminator, CRITIC_ITERS)
         self.logs_dir = os.path.join(logs_dir, self.configuration)
         self.checkpoints_dir = os.path.join(self.logs_dir, "checkpoints/")
         self.summaries_dir = os.path.join(self.logs_dir, "summaries/")
@@ -41,15 +37,18 @@ class SceneGraphWGAN(object):
         if not os.path.exists(self.summaries_dir):
             os.makedirs(self.summaries_dir)
         else:
-            print "WARNING: Summaries directory already exists for {} configuration. Files will be deleted.".format(self.configuration)
+            print "WARNING: Summaries directory already exists for {} configuration. Old files will be deleted.".format(self.configuration)
 
         if not os.path.exists(self.samples_dir):
             os.makedirs(self.samples_dir)
         else:
-            print "WARNING: Samples directory already exists for {} configuration. Files will be overwritten.".format(self.configuration)
+            print "WARNING: Samples directory already exists for {} configuration. Old files will be deleted".format(self.configuration)
 
         for f in os.listdir(self.summaries_dir):
             call(["rm", os.path.join(self.summaries_dir, f)])
+
+        for f in os.listdir(self.samples_dir):
+            call(["rm", "-rf", os.path.join(self.samples_dir, f)])
 
         #Calculating vocabulary and sequence lengths
         with open(path_to_vocab_json, "r") as f:
@@ -60,29 +59,31 @@ class SceneGraphWGAN(object):
 
         #Image feature dimensionality
         self.image_feat_dim = [196, 512]
+        self.word_embedding_size = 300
         #self.image_feat_dim = 4096
 
         #Hyperparameters
         self.BATCH_SIZE = BATCH_SIZE
         self.LAMBDA = 10
-        self.CRITIC_ITERS = 25
+        self.CRITIC_ITERS = CRITIC_ITERS
         self.DIM = 512
         self.ITERS = 100000
 
-        #Map architecture keywords to actual architectures
-        discriminators = { "mlp" : architectures.mlp_discriminator,
-                           "conv1D" : architectures.conv1D_discriminator,
-                           "lstm" : architectures.discriminator_with_attention
-        }
-
-        generators = { "mlp" : architectures.mlp_generator,
-                       "conv1D" : architectures.conv1D_generator,
-                       "lstm" : architectures.generator_with_attention
-        }
 
         #Import the correct discriminator according to the keyword argument
-        from discriminators[discriminator] import Discriminator
-        from generators[generator] import Generator
+        if discriminator == "mlp":
+            from architectures.mlp_discriminator import Discriminator
+        elif discriminator == "conv1D":
+            from architectures.conv1D_discriminator import Discriminator
+        else:
+            from architectures.discriminator_with_attention import Discriminator
+
+        if generator == "mlp":
+            from architecutres.mlp_generator import Generator
+        elif generator == "conv1D":
+            from architectures.conv1D_generator import Generator
+        else:
+            from architectures.generator_with_attention import Generator
 
         #Initialize all the generator and discriminator variables
         with tf.variable_scope("Generator") as scope:
@@ -91,10 +92,11 @@ class SceneGraphWGAN(object):
         with tf.variable_scope("Discriminator") as scope:
             self.d = Discriminator(self.vocab_size, batch_size = self.BATCH_SIZE)
 
-    def Generator(self, n_samples, image_feats, prev_outputs=None):
+    #def Generator(self, image_feats, noise, init_word_embedding, prev_outputs=None):
+    def Generator(self, image_feats, batch_size, prev_outputs=None):
         print "Building Generator"
         with tf.variable_scope("Generator", reuse=True) as scope:
-            generated_words = self.g.build_generator(image_feats)
+            generated_words = self.g.build_generator(image_feats, batch_size)
             return generated_words
 
     def Discriminator(self, triple_input, image_feats):
@@ -108,10 +110,13 @@ class SceneGraphWGAN(object):
         #real_inputs = tf.one_hot(real_inputs_discrete, len(charmap))
         self.real_inputs = tf.placeholder(tf.float32, shape=[None, self.seq_len, self.vocab_size])
         self.image_feats = tf.placeholder(tf.float32, shape=[None, self.image_feat_dim[0], self.image_feat_dim[1]])
-        #self.real_inputs = tf.placeholder(tf.float32, shape=[None, self.seq_len, self.vocab_size])
-        #self.image_feats = tf.placeholder(tf.float32, shape=[None, self.image_feat_dim])
-        fake_inputs = self.Generator(self.BATCH_SIZE, self.image_feats)
-        fake_inputs_discrete = tf.argmax(fake_inputs, fake_inputs.get_shape().ndims-1)
+        self.batch_size_placeholder = tf.placeholder(tf.int32)
+        #self.init_word_embedding = tf.placeholder(tf.float32, shape=[None, self.word_embedding_size])
+        #self.noise_placeholder = tf.placeholder(tf.float32, shape=[None, self.image_feat_dim[1]])
+
+        #fake_inputs = self.Generator(self.image_feats, self.noise_placeholder, self.init_word_embedding)
+        fake_inputs = self.Generator(self.image_feats, self.batch_size_placeholder)
+        #fake_inputs_discrete = tf.argmax(fake_inputs, fake_inputs.get_shape().ndims-1)
 
         self.fake_inputs = fake_inputs
 
@@ -121,12 +126,12 @@ class SceneGraphWGAN(object):
         disc_cost = tf.reduce_mean(disc_fake) - tf.reduce_mean(disc_real)
         gen_cost = -tf.reduce_mean(disc_fake)
 
-        #tf.summary.scalar("Discriminator Cost", disc_cost)
-        #tf.summary.scalar("Generator Cost", gen_cost)
+        tf.summary.scalar("Discriminator Cost", disc_cost)
+        tf.summary.scalar("Generator Cost", gen_cost)
 
         # WGAN lipschitz-penalty
         alpha = tf.random_uniform(
-            shape=[self.BATCH_SIZE,1,1], 
+            shape=[self.batch_size_placeholder,1,1], 
             minval=0.,
             maxval=1.
         )
@@ -180,22 +185,33 @@ class SceneGraphWGAN(object):
                     all_pairs.append((im_feats, caps[c]))
             indices = list(range(len(all_pairs)))
             random.shuffle(indices)
-            while len(indices) > self.BATCH_SIZE:
-                im_batch = np.array([all_pairs[i][0] for i in indices[-self.BATCH_SIZE:]], dtype=np.float32)
-                triple_batch = np.array([all_pairs[i][1] for i in indices[-self.BATCH_SIZE:]])
-                t_batch = np.zeros((self.BATCH_SIZE, 3, self.vocab_size), dtype=np.float32)
-                for row in range(t_batch.shape[0]):
-                    for token in range(t_batch.shape[1]):
-                        t_batch[row, token, triple_batch[row, token]] = 1.0
-                del indices[-self.BATCH_SIZE:]
-                yield im_batch, t_batch
+            while len(indices) > 0:
+                batch_size = self.BATCH_SIZE
+                if len(indices) >= self.BATCH_SIZE:
+                    im_batch = np.array([all_pairs[i][0] for i in indices[-self.BATCH_SIZE:]], dtype=np.float32)
+                    triple_batch = np.array([all_pairs[i][1] for i in indices[-self.BATCH_SIZE:]])
+                    t_batch = np.zeros((self.BATCH_SIZE, 3, self.vocab_size), dtype=np.float32)
+                    for row in range(t_batch.shape[0]):
+                        for token in range(t_batch.shape[1]):
+                            t_batch[row, token, triple_batch[row, token]] = 1.0
+                    del indices[-self.BATCH_SIZE:]
+                else:
+                    im_batch = np.array([all_pairs[i][0] for i in indices], dtype=np.float32)
+                    triple_batch = np.array([all_pairs[i][1] for i in indices])
+                    t_batch = np.zeros((len(indices), 3, self.vocab_size), dtype=np.float32)
+                    for row in range(t_batch.shape[0]):
+                        for token in range(t_batch.shape[1]):
+                            t_batch[row, token, triple_batch[row, token]] = 1.0
+                    batch_size = len(indices)
+                    del indices[:]
+                yield im_batch, t_batch, batch_size
 
-    #Generate samples in TensorBoard
     #This will require that in the preprocessing phase, a small set of testing images
     #is set aside. The extracted features will need to be mapped to the images they came
     #from somehow. Need to figure out how to put real captions beside the generated ones. 
     #Also potentially visualize attention here.
-    def generateSamples(self, session):
+    def generateSamples(self, session, iteration, im_batch=None):
+        iteration = str(iteration)
         #For image in list in eval
         eval_image_path = os.path.join(self.batch_path, "eval")
         #Load the filename to feats dictionary
@@ -204,14 +220,29 @@ class SceneGraphWGAN(object):
             filename_to_feats = json.load(f)
         with open(os.path.join(eval_image_path, "filenames.txt"), 'r') as f:
             filenames = [line.strip() for line in f]
-        list_of_images = []
+        #list_of_images = []
+        count = 0
+        samples_dir = os.path.join(self.samples_dir, iteration)
+        if not os.path.exists(samples_dir):
+            os.makedirs(samples_dir)
         for f in filenames:
             #Open the file
-            img = Image.open(f)
-            #Load the corresponding features from the dictionary
-            im_feats = filename_to_feats[f]
+            #Load the corresponding features from the dictionary or pick from the input image batch
+            batch = 19
+            #noise = np.random.uniform(size=(batch, self.image_feat_dim[1]))
+            #init_word_embedding = np.zeros((batch, self.word_embedding_size))
+            if im_batch is not None:
+                if count == im_batch.shape[0]:
+                    return
+                im_feats = im_batch[count, : , :]
+                im_feats = np.tile(im_feats, (batch, 1, 1))
+                img = Image.new('RGB', (224, 224))
+            else:
+                im_feats = np.array([filename_to_feats[f]]*batch)
+                img = Image.open(f)
             #Generate some amount of triples from the features
-            samples = session.run(self.fake_inputs, feed_dice={self.image_feats : im_feats})
+            samples = session.run(self.fake_inputs, feed_dict={self.image_feats : im_feats, \
+                self.batch_size_placeholder : batch})
             samples = np.argmax(samples, axis=2)
             decoded_samples = []
             #new_im will contain the original image and the text
@@ -228,94 +259,146 @@ class SceneGraphWGAN(object):
                 for j in xrange(len(samples[i])):
                     decoded.append(self.decoder[samples[i][j]])
                 s = " ".join(tuple(decoded))
-                draw.text((10, 5 + (10*position)), s)
+                draw.text((10, 2 + (10*position)), s)
+                position += 1
             #Paste the original image and text image together
             new_im.paste(img, (0,0))
             new_im.paste(text_im, (224, 0))
+            if im_batch is not None:
+                new_im.save(os.path.join(samples_dir, "{}_train.jpg".format(count)))
+            else:
+                new_im.save(os.path.join(samples_dir, "{}_eval.jpg".format(count)))
+            
             #Load the combined image as a numpy array
-            new_im.load()
-            new_im = np.array(new_im, dtype=np.float64)
+            #new_im.load()
+            #new_im = np.array(new_im, dtype=np.float64)
             #Append the image to a list
-            list_of_images.append(new_im)
+            #list_of_images.append(new_im)
+            count += 1
         #Stack the list into a tensor
-        tensorflow_images = tf.stack(list_of_images)
+        #tensorflow_images = tf.stack(list_of_images)
         #Write out the stacked tensor to an image summary
-        tf.summary.image("generated_triples", tensorflow_images, max_outputs = 4)
+        #tf.summary.image("generated_triples", tensorflow_images, max_outputs = 4)
         
+    def validate(self, session):
+        eval_image_path = os.path.join(self.batch_path, "eval")
+        #Pick a random batch of evaluation images
+        random_batch_index = np.random.randint(0, 10)
+        npz = np.load(os.path.join(eval_image_path, "batch_{}.npz".format(random_batch_index)))
+        big_arr = npz['arr_0']
+        all_pairs = []
+        for i in xrange(0, big_arr.shape[0], 2):
+            im_feats = big_arr[i]
+            caps = big_arr[i+1]
+            for c in xrange(caps.shape[0]):
+                all_pairs.append((im_feats, caps[c]))
+        indices = list(range(len(all_pairs)))
+        random.shuffle(indices)
+        num_losses = 0.0
+        gen_total = 0.0
+        disc_total = 0.0
+        while len(indices) > self.BATCH_SIZE:
+            im_batch = np.array([all_pairs[i][0] for i in indices[-self.BATCH_SIZE:]], dtype=np.float32)
+            triple_batch = np.array([all_pairs[i][1] for i in indices[-self.BATCH_SIZE:]])
+            t_batch = np.zeros((self.BATCH_SIZE, 3, self.vocab_size), dtype=np.float32)
+            for row in range(t_batch.shape[0]):
+                for token in range(t_batch.shape[1]):
+                    t_batch[row, token, triple_batch[row, token]] = 1.0
+            del indices[-self.BATCH_SIZE:]
+            #Run the generator and discriminator loss on this batch
+            num_losses += 1.0
+            noise = np.random.uniform(size=(self.BATCH_SIZE, self.image_feat_dim[1]))
+            init_word_embedding = np.zeros((self.BATCH_SIZE, self.word_embedding_size))
+            feed_dict = {self.real_inputs:t_batch, self.image_feats:im_batch, \
+                self.batch_size_placeholder : self.BATCH_SIZE}
+            _gen_cost = session.run(self.gen_cost, feed_dict=feed_dict)
+            _disc_cost = session.run(self.disc_cost, feed_dict=feed_dict)
+            gen_total += _gen_cost 
+            disc_total += _disc_cost
+        gen_total = gen_total / num_losses
+        disc_total = disc_total / num_losses
+        return gen_total, disc_total
 
+            
 
-    def Train(self, epochs):
+    def Train(self, epochs, print_interval):
         self.saver = tf.train.Saver()
         self.Loss()
-        #summary_op = tf.summary.merge_all()
-        start_time = time.time()
+        summary_op = tf.summary.merge_all()
         with tf.Session() as session:
-            self.generateSamples(session)
-            summary_op = tf.summary.merge_all()
+            loss_print_interval = 50
+            #self.generateSamples(session)
             writer = tf.summary.FileWriter(self.summaries_dir, session.graph)
+
+            run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+            run_metadata = tf.RunMetadata()
 
 
             session.run(tf.global_variables_initializer())
 
-            """def generate_samples(image_feats):
-                samples = session.run(self.fake_inputs, feed_dict={self.image_feats: image_feats})
-                samples = np.argmax(samples, axis=2)
-                decoded_samples = []
-                for i in xrange(len(samples)):
-                    decoded = []
-                    for j in xrange(len(samples[i])):
-                        decoded.append(self.decoder[samples[i][j]])
-                    decoded_samples.append(tuple(decoded))
-                return decoded_samples"""
-
             gen = self.DataGenerator()
 
-
-            print "Training WGAN for {} epochs. To monitor training via TensorBoard, run python -m tensorflow.tensorboard --logdir {}"
+            print "Training WGAN for {} epochs. To monitor training via TensorBoard, run python -m tensorflow.tensorboard --logdir {}"\
                 .format(epochs, self.summaries_dir)
 
+            start_time = time.time()
             for epoch in range(epochs):
                 iteration = 0
                 max_iteration = 0
-                for im_batch, triple_batch in self.DataGenerator():
+                for im_batch, triple_batch, batch_size in self.DataGenerator():
+
+                    #noise = np.random.uniform(size=(batch_size, self.image_feat_dim[1]))
+                    #init_word_embedding = np.zeros((batch_size, self.word_embedding_size))
+
+                    #Make sure all the batch sizes are the same
+                    #assert im_batch.shape[0] == triple_batch.shape[0] == noise.shape[0] == init_word_embedding.shape[0] == batch_size
+
                     #Train Generator
                     if iteration > 0:
-                        _ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch})
+                        #Track training statistics every ten iterations
+                        _ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.batch_size_placeholder : batch_size})
+                        #_ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.batch_size_placeholder : batch_size}, options=run_options, run_metadata=run_metadata)
+                        #writer.add_run_metadata(run_metadata, "Iteration %d generator" % iteration)
+                        #_ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.noise:noise}, options=run_options, run_metadata=run_metadata)
 
                     #Train Critic
-                    for i in xrange(self.CRITIC_ITERS):
+                    if iteration == 0:
+                        critic_iters = 30
+                    else:
+                        critic_iters = self.CRITIC_ITERS
+                    for i in xrange(critic_iters):
                         #im_batch, triple_batch = gen.next()
-                        _disc_cost, _ = session.run(
-                            [self.disc_cost, self.disc_train_op],
-                            feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch}
-                        )
+                        if i == 0:
+                            _disc_cost, _ = session.run(
+                                [self.disc_cost, self.disc_train_op],
+                                feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size}
+                            )
+                        else:
+                            _ = session.run(
+                                [self.disc_train_op],
+                                feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size}
+                            )
 
-                    if iteration % 200 == 0:
-
+                    if iteration % loss_print_interval == 0:
                         stop_time = time.time()
                         if iteration == 0:
                             duration = stop_time - start_time
                         else:
-                            duration = (stop_time - start_time) / 200.0
+                            duration = (stop_time - start_time) / loss_print_interval
                         start_time = stop_time
-                        summary, _gen_cost = session.run([summary_op, self.gen_cost], feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch})
-                        #_gen_cost = session.run(self.gen_cost, feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch})
+                        summary, _gen_cost = session.run([summary_op, self.gen_cost], 
+                            feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size})
+                        val_gen, val_disc = self.validate(session)
+                        #_gen_cost = session.run(self.gen_cost, feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.noise:noise})
                         writer.add_summary(summary, iteration)
                         writer.flush()
 
-                        print "Time {}/itr, Step: {}, generator loss: {}, discriminator loss: {}".format(
-                                duration, iteration, _gen_cost, _disc_cost)
+                        print "Time {}/itr, Step: {}\n Training: generator loss: {}, discriminator loss: {}\n Eval: generator loss: {}, discriminator loss: {}".format(
+                                duration, iteration, _gen_cost, _disc_cost, val_gen, val_disc)
 
-                    if iteration % 1000 == 0:
-                        """samples = []
-                        for i in xrange(10):
-                            samples.extend(generate_samples(im_batch))
-
-                        with open(os.path.join(self.samples_dir, "iteration_{}.txt".format(iteration*(epoch+1), 'w'))) as f:
-                            for s in samples:
-                                s = " ".join(s)
-                                f.write(s + "\n")"""
-                        self.generateSamples(session)
+                    if iteration % print_interval == 0:
+                        self.generateSamples(session, iteration)
+                        self.generateSamples(session, iteration, im_batch=im_batch)
                         self.saver.save(session, os.path.join(self.checkpoints_dir, "model.ckpt"), global_step=(epoch*max_iteration)+iteration)
 
                     iteration += 1
@@ -333,7 +416,7 @@ def parseConfigFile(path_to_config_file = "./config.txt"):
 if __name__ == "__main__":
     #"Permanent" arguments from the config file
     arg_dict = parseConfigFile()
-    batch_path = os.path.join(arg_dict["visual_genome"], "conv_batches")
+    batch_path = os.path.join(arg_dict["visual_genome"], "batches")
     path_to_vocab_json = arg_dict["vocab"]
     logs_dir = arg_dict["logs"]
     samples_dir = arg_dict["samples"]
@@ -343,14 +426,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--batch_size", default=64, help="Batch size defaults to 64", type=int)
+    parser.add_argument("--critic_iters", default=10, help="Number of iterations to train the critic", type=int)
     parser.add_argument("--generator", default="lstm", help="Generator defaults to LSTM with attention. See the architectures folder.")
     parser.add_argument("--discriminator", default="lstm", help="Discriminator defaults to LSTM with attention. See the architectures folder.")
     parser.add_argument("--epochs", default=30, help="Number of epochs defaults to 30", type=int)
     parser.add_argument("--resume", default=False, help="Resume training from the last checkpoint for this configuration", type=bool)
+    parser.add_argument("--print_interval", default=500, help="The model will be saved and samples will be generated every <print_interval> iterations", type=int)
+    parser.add_argument("--tf_verbosity", default="ERROR", help="Sets tensorflow verbosity. Specifies which warning level to suppress. Defaults to ERROR")
 
     args = parser.parse_args()
     params = vars(args)
 
+    verbosity_dict = {"DEBUG" : 0, "INFO" : 1, "WARN" : 2, "ERROR" : 3}
+
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '{}'.format(verbosity_dict[params["tf_verbosity"]])
+
     #Begin training
-    wgan = SceneGraphWGAN(batch_path, path_to_vocab_json, params["generator"], params["discriminator"], BATCH_SIZE=params["batch_size"])
-    wgan.Train(params["epochs"])
+    wgan = SceneGraphWGAN(batch_path, path_to_vocab_json, params["generator"], params["discriminator"], logs_dir, samples_dir, 
+           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"])
+    wgan.Train(params["epochs"], params["print_interval"])

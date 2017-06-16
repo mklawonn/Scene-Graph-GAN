@@ -147,7 +147,7 @@ def buildVocab(sg_dict):
             #The subject and object should both already be added
             #via the objects loop above
 
-    with open("./vocab.json", "w") as f:
+    with open(".preprocessin/vocab.json", "w") as f:
         json.dump(vocab, f)
 
     return vocab
@@ -236,6 +236,7 @@ def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means
         sg_dict = {sg['image_id']:sg for sg in json.load(f)}"""
 
 
+    tf.reset_default_graph()
     im_placeholder = tf.placeholder("float", [None, 224, 224, 3])
     tf.import_graph_def(tf_graph, input_map={"images" : im_placeholder})
     graph = tf.get_default_graph()
@@ -293,14 +294,13 @@ def enoughElements(sg_dict, im_id, vocab):
     attributes, relations = parseSceneGraph(sg_dict[im_id], vocab)
     return (len(attributes) + len(relations)) >= 10
 
-def genAndSaveImFeats(path_to_data, path_to_images, image_files, sg_dict, tf_graph, image_means, vocab, batch_size, batch_path, train = True):
+def genAndSaveImFeats(path_to_data, path_to_images, image_files, sg_dict, tf_graph, image_means, vocab, batch_size, batch_path, eval = False):
     print "Creating image generator"
     im_generator = imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = batch_size)
     print "Done"
     count = 0
     for image_feats, id_batch, att_rels_batch in im_generator:
         path_to_batch_file = os.path.join(batch_path, "batch_{}.npz".format(count))
-        count += 1
         feat_list = [i for i in image_feats]
         cap_list = [np.array(i) for i in att_rels_batch]
         save_list = [None]*(len(feat_list)+len(cap_list))
@@ -308,17 +308,36 @@ def genAndSaveImFeats(path_to_data, path_to_images, image_files, sg_dict, tf_gra
         save_list[1::2] = cap_list
         np.savez(path_to_batch_file, save_list)
         #Do some extra steps for the eval step
-        if not train and count == 0:
-            #Do this for just the first batch 
+        if eval and count == 0:
+            print "Writing a list of files corresponding to images from eval batch_0"
+            #Do this for only the first batch 
+            #Filenames order should match with feature order in the save list
+            #That way when the batch_0.npz file is opened, big_arr[0] should contain features
+            #for the image at filenames[0], big_arr[2] should be for filenames[1], etc
             filenames = [os.path.join(path_to_images, "{}.jpg".format(id)) for id in id_batch]
-            #Create filename to feats dictionary if it doesn't exist
-            path_to_dict = os.path.join(batch_path, "filename_to_feats_dict.json")
-            #Have to go back later and change the dictionary to use the normalized features
-            path_to_filenames = os.path.join(batch_path, "filenames.txt"), 'r')
+            path_to_filenames = os.path.join(batch_path, "filenames.txt")
             #Create list of filenames if it doesn't exist
             with open(path_to_filenames, "w") as f:
                 for name in filenames:
                     f.write(name + "\n")
+            print "Done"
+        count += 1
+
+
+def writeFilenameToFeatDict(eval_path):
+    path_to_dict = os.path.join(eval_path, "filename_to_feats_dict.json")
+    path_to_filenames = os.path.join(eval_path, "filenames.txt")
+    npz = np.load(os.path.join(eval_path, "batch_0.npz"))
+    big_arr = npz['arr_0']
+    filename_to_feats = {}
+    with open(path_to_filenames, "r") as filenames:
+        big_arr_index = 0
+        for name in filenames:
+            filename_to_feats[name.strip()] = big_arr[big_arr_index].tolist()
+            big_arr_index += 2
+                
+    with open(path_to_dict, "w") as dict_file:
+        json.dump(filename_to_feats, dict_file)
 
 def toNPZ(path_to_data, vgg_tf_model):
     path_to_data += "/" if path_to_data[-1] != "/" else ""
@@ -346,19 +365,27 @@ def toNPZ(path_to_data, vgg_tf_model):
     print "Size of vocabulary after pruning"
     print len(vocab)
 
-    print "Now removing grayscale images and images with less than 10 combined relations and attributes"
-    #Has to be a dict rather than a list because certain im_ids might not have associated scene graphs
-    #If a list were used it could results in list index out of range errors
-    #We're filtering out grayscale images
-    image_files = {im_id:"{}{}.jpg".format(path_to_images, im_id) \
-            for im_id in sorted(sg_dict) if not checkGrayscale("{}{}.jpg".format(path_to_images, im_id))}
-    #Also filter out those files which don't have at least ten combined relationships and attributes
-    bad = []
-    for im_id in image_files:
-        if not enoughElements(sg_dict, im_id, vocab):
-            bad.append(im_id)
-    image_files = {im_id:image_files[im_id] for im_id in image_files if im_id not in bad}
-    print "Done"
+    if os.path.exists(os.path.join("preprocessing", "image_file_list.json")):
+        with open(os.path.join("preprocessing", "image_file_list.json"), "r") as f:
+            image_files = json.load(f)
+        #Convert to int
+        image_files = {int(i):image_files[i] for i in image_files}
+    else:
+        print "Now removing grayscale images and images with less than 10 combined relations and attributes"
+        #Has to be a dict rather than a list because certain im_ids might not have associated scene graphs
+        #If a list were used it could results in list index out of range errors
+        #We're filtering out grayscale images
+        image_files = {im_id:"{}{}.jpg".format(path_to_images, im_id) \
+                for im_id in sorted(sg_dict) if not checkGrayscale("{}{}.jpg".format(path_to_images, im_id))}
+        #Also filter out those files which don't have at least ten combined relationships and attributes
+        bad = []
+        for im_id in image_files:
+            if not enoughElements(sg_dict, im_id, vocab):
+                bad.append(im_id)
+        image_files = {im_id:image_files[im_id] for im_id in image_files if im_id not in bad}
+        print "Done"
+        with open("image_file_list.json", "w") as f:
+            json.dump(image_files, f)
 
     print "Splitting into training and eval"
     training_files = dict(image_files.items()[len(image_files)/20:])
@@ -386,14 +413,17 @@ def toNPZ(path_to_data, vgg_tf_model):
     #e.g on a 12GB Titan X a batch size of 256 was too big
     batch_size = 128
 
-    print "Generating image feats for training data"
-    genAndSaveImFeats(path_to_data, path_to_images, training_files, sg_dict, tf_graph, image_means, vocab, batch_size, batch_path, train = True):
 
     print "Generating image feats for eval data"
-    genAndSaveImFeats(path_to_data, path_to_images, eval_files, sg_dict, tf_graph, image_means, vocab, batch_size, batch_path, train = False)
+    genAndSaveImFeats(path_to_data, path_to_images, eval_files, sg_dict, tf_graph, image_means, vocab, batch_size, eval_path, eval = True)
+
+    print "Generating image feats for training data"
+    genAndSaveImFeats(path_to_data, path_to_images, training_files, sg_dict, tf_graph, image_means, vocab, batch_size, train_path, eval = False)
 
     normalizeFeatures(train_path, train_path)
     normalizeFeatures(train_path, eval_path)
+
+    writeFilenameToFeatDict(eval_path)
 
 if __name__ == "__main__":
     with open("./config.txt", "r") as f:

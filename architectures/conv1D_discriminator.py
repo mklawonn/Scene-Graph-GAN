@@ -71,10 +71,10 @@ class Discriminator(object):
         embedded_triple = tf.nn.relu(embedded_triple)
         embedded_triple = tf.nn.conv1d(value=embedded_triple, filters=self.triple_embedder_3, stride=1, padding='SAME', data_format='NCHW')
 
-        flattened_triple = tf.reshape(embedded_triple, [self.batch_size, self.dim_hidden*self.seq_len])
+        flattened_triple = tf.reshape(embedded_triple, [-1, self.dim_hidden*self.seq_len])
         flattened_triple = tf.add(tf.matmul(flattened_triple, self.triple_flatten_W), self.triple_flatten_b) 
 
-        flattened_context = tf.reshape(context, [self.batch_size, self.dim_context[0]*self.dim_context[1]])
+        flattened_context = tf.reshape(context, [-1, self.dim_context[0]*self.dim_context[1]])
         embedded_context = tf.add(tf.matmul(flattened_context, self.context_embed_W), self.context_embed_b)
 
         context_and_triple = tf.concat([embedded_context, flattened_triple], axis=1)
@@ -136,7 +136,7 @@ class Discriminator(object):
         output = resnet_input + (0.3*output)
 
         #Output layer to produce logits
-        output = tf.reshape(output, [self.batch_size, (self.dim_context[1]+self.dim_hidden)*self.seq_len])
+        output = tf.reshape(output, [-1, (self.dim_context[1]+self.dim_hidden)*self.seq_len])
         output = tf.add(tf.matmul(output, self.output_W_1), self.output_b_1)
         output = tf.nn.relu(output)
         output_logits = tf.add(tf.matmul(output, self.output_W_2), self.output_b_2)

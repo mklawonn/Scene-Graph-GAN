@@ -12,7 +12,7 @@ class Discriminator(object):
         self.dim_hidden = dim_hidden
         self.context_shape = context_shape
         self.n_lstm_steps = n_lstm_steps
-        self.batch_size = batch_size
+        #self.batch_size = batch_size
         self.maxlen = n_lstm_steps
 
         xavier_initializer = tf.contrib.layers.xavier_initializer()
@@ -58,12 +58,12 @@ class Discriminator(object):
         
         for ind in range(self.n_lstm_steps):
             current_words = input_triples[:, ind, :]
-            current_words = tf.reshape(current_words, [self.batch_size, self.vocab_size])
+            current_words = tf.reshape(current_words, [-1, self.vocab_size])
             word_emb = tf.matmul(current_words, self.Wemb)
             #Calculate \hat{z}
             #Equation (4)
             #Concatenate flattened context with previous hidden state and the noise vector, and feed through attention mlp
-            flattened_context = tf.reshape(context, [self.batch_size, self.context_shape[0]*self.context_shape[1]])
+            flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])
             encoded_context = tf.matmul(flattened_context, self.context_encode_W)
             context_and_hidden_state = tf.concat([encoded_context, h], 1)
             e = tf.add(tf.matmul(context_and_hidden_state, self.att_W), self.att_b)
@@ -91,6 +91,8 @@ class Discriminator(object):
             c = f * c + i * g
             #h_t = o_t * tanh(c_t)
             h = o * tf.nn.tanh(c)
+            #Regularization?
+            h = tf.nn.dropout(h, 0.5)
 
             logits = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
             

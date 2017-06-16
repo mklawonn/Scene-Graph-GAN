@@ -3,14 +3,14 @@ import numpy as np
 
 class Generator(object):
 
-    def __init__(self, vocab_size, context_shape=[196, 512], seq_len = 3, dim_hidden=512, batch_size=64):
+    def __init__(self, vocab_size, context_shape=[196, 512], seq_len = 3, dim_hidden=512, dim_embed = 300, batch_size=64):
         self.vocab_size = vocab_size
         self.context_shape = context_shape
         self.dim_hidden = dim_hidden
-        self.batch_size = batch_size
+        #self.batch_size = batch_size
         self.seq_len = seq_len
         self.noise_dim = context_shape[1]
-        self.dim_embed = 300
+        self.dim_embed = dim_embed
         self.soft_gumbel_temp = 0.9
 
         xavier_initializer = tf.contrib.layers.xavier_initializer()
@@ -22,6 +22,8 @@ class Generator(object):
         self.context_encode_W = tf.get_variable("context_encode", [self.context_shape[0]*self.context_shape[1], self.context_shape[1]*2], initializer=xavier_initializer)
 
         self.Wemb = tf.get_variable("Wemb", [self.vocab_size, self.dim_embed], initializer=xavier_initializer)
+        #Stupid stupid hack to allow an initial word embedding to be variable batch_size
+        #self.zero_emb = tf.zeros([self.context_shape[1], self.dim_embed], name="zero_emb")
 
         #self.att_W = tf.get_variable("att_W", [(self.dim_context*2)+self.dim_hidden+self.noise_dim, self.context_shape[0]], initializer=xavier_initializer)
         self.att_W = tf.get_variable("att_W", [(self.context_shape[1]*2)+self.dim_hidden+self.noise_dim, self.context_shape[0]], initializer=xavier_initializer)
@@ -49,18 +51,19 @@ class Generator(object):
         return initial_hidden, initial_memory
 
 
-    def build_generator(self, context):
-        flattened_context = tf.reshape(context, [self.batch_size, self.context_shape[0]*self.context_shape[1]])
+    def build_generator(self, context, batch_size):
+        flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])
         encoded_context = tf.matmul(flattened_context, self.context_encode_W)
 
-        noise = tf.random_uniform([self.batch_size, self.noise_dim])
+        noise = tf.random_uniform([batch_size, self.noise_dim])
         h, c = self.get_initial_lstm(tf.reduce_mean(context, 1))#(batch_size, dim_hidden)
 
         l = []
 
         for i in range(self.seq_len):
             if i == 0:
-                word_emb = tf.zeros([self.batch_size, self.dim_embed])
+                #word_emb = tf.matmul(noise, self.zero_emb)
+                word_emb = tf.zeros([batch_size, self.dim_embed])
             else:
                 #word_emb = tf.nn.embedding_lookup(self.Wemb, word_prediction)
                 word_emb = tf.matmul(word_prob, self.Wemb)
@@ -68,7 +71,6 @@ class Generator(object):
 
             context_hidden_state_and_noise = tf.concat([encoded_context, h, noise], 1)
             e = tf.add(tf.matmul(context_hidden_state_and_noise, self.att_W), self.att_b)
-
             alpha = tf.nn.softmax(e)
             #alpha = tf.contrib.distributions.RelaxedOneHotCategorical(self.soft_gumbel_temp, logits=e).sample()
             z_hat = tf.reduce_sum(tf.multiply(context, tf.expand_dims(alpha, 2)), axis = 1) #Output is [batch size, D]
@@ -94,9 +96,9 @@ class Generator(object):
 
             #Could make the decoding a "deep output layer" by adding another layer
             logits = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
-            #word_prob = tf.nn.softmax(logits)
+            word_prob = tf.nn.softmax(logits)
             #TODO Look at boundary GAN paper
-            word_prob = tf.contrib.distributions.RelaxedOneHotCategorical(self.soft_gumbel_temp, logits=logits).sample()
+            #word_prob = tf.contrib.distributions.RelaxedOneHotCategorical(self.soft_gumbel_temp, logits=logits).sample()
             #word_prediction = tf.argmax(logits, 1)
             l.append(word_prob)
 
