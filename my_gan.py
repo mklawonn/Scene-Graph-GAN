@@ -368,16 +368,10 @@ class SceneGraphWGAN(object):
                         critic_iters = self.CRITIC_ITERS
                     for i in xrange(critic_iters):
                         #im_batch, triple_batch = gen.next()
-                        if i == 0:
-                            _disc_cost, _ = session.run(
-                                [self.disc_cost, self.disc_train_op],
-                                feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size}
-                            )
-                        else:
-                            _ = session.run(
-                                [self.disc_train_op],
-                                feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size}
-                            )
+                        _disc_cost, _ = session.run(
+                            [self.disc_cost, self.disc_train_op],
+                            feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size}
+                        )
 
                     if iteration % loss_print_interval == 0:
                         stop_time = time.time()

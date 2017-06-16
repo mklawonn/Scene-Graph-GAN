@@ -17,10 +17,13 @@ class Generator(object):
 
 
         #Embed the input
-        self.context_embed_W = tf.get_variable("context_embed_W", [dim_context[0]*dim_context[1], dim_hidden*2], initializer=he_initializer)
-        self.context_embed_b = tf.get_variable("context_embed_b", [dim_hidden*2], initializer=constant_initializer)
+        self.context_embed_W = tf.get_variable("context_embed_W", [dim_context[0]*dim_context[1], dim_hidden], initializer=he_initializer)
+        self.context_embed_b = tf.get_variable("context_embed_b", [dim_hidden], initializer=constant_initializer)
 
-        self.att_W = tf.get_variable("att_W", [dim_hidden*2 + self.noise_dim, dim_context[0]], initializer = he_initializer)
+        self.noise_embed_W = tf.get_variable("noise_embed_W", [self.noise_dim, dim_hidden], initializer=he_initializer)
+        self.noise_embed_b = tf.get_variable("noise_embed_b", [dim_hidden], initializer=constant_initializer)
+
+        self.att_W = tf.get_variable("att_W", [dim_hidden * 2, dim_context[0]], initializer = he_initializer)
         self.att_b = tf.get_variable("att_b", [dim_context[0]], initializer = constant_initializer)
 
         self.sequence_W = tf.get_variable("sequence_W", [dim_context[1], dim_context[1]*seq_len], initializer=he_initializer)
@@ -51,7 +54,9 @@ class Generator(object):
         flattened_context = tf.reshape(context, [-1, self.dim_context[0]*self.dim_context[1]])
         embedded_context = tf.add(tf.matmul(flattened_context, self.context_embed_W), self.context_embed_b)
 
-        context_and_noise = tf.concat([embedded_context, noise], axis=1)
+        embedded_noise = tf.add(tf.matmul(noise, self.noise_embed_W), self.noise_embed_b)
+
+        context_and_noise = tf.concat([embedded_context, embedded_noise], axis=1)
 
         #Begin attention operation
         #z_hat represents a weighted summation across all features of the image

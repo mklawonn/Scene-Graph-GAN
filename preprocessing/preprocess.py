@@ -420,8 +420,11 @@ def toNPZ(path_to_data, vgg_tf_model):
     print "Generating image feats for training data"
     genAndSaveImFeats(path_to_data, path_to_images, training_files, sg_dict, tf_graph, image_means, vocab, batch_size, train_path, eval = False)
 
-    normalizeFeatures(train_path, train_path)
+    #IMPORTANT!!!! YOU HAVE TO DO THE EVAL PATH NORMALIZATION BEFORE THE TRAINING PATH
+    #SINCE THE EVAL NORMALIZATION DEPENDS ON STATISTICS FROM THE TRAINING PATH
+    #FEATURES!!!! IF THE TRAINING PATH GETS NORMALIZED FIRST THEN THE FEATURES ARE OFF
     normalizeFeatures(train_path, eval_path)
+    normalizeFeatures(train_path, train_path)
 
     writeFilenameToFeatDict(eval_path)
 
