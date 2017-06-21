@@ -168,11 +168,10 @@ class SceneGraphWGAN(object):
         #gen_grads = optimizer.compute_gradients(gen_cost, var_list=gen_params)
         #disc_grads = optimizer.compute_gradients(disc_cost, var_list=disc_params)
 
-        #Switching to RMSProp, does better on non-stationary problems
-        #self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=gen_params)
-        #self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=disc_params)
-        self.gen_train_op = tf.train.RMSPropOptimizer(learning_rate=1e-3).minimize(gen_cost, var_list=gen_params)
-        self.disc_train_op = tf.train.RMSPropOptimizer(learning_rate=1e-3).minimize(disc_cost, var_list=disc_params)
+        self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=gen_params)
+        self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=disc_params)
+        #self.gen_train_op = tf.train.RMSPropOptimizer(learning_rate=1e-4).minimize(gen_cost, var_list=gen_params)
+        #self.disc_train_op = tf.train.RMSPropOptimizer(learning_rate=1e-3).minimize(disc_cost, var_list=disc_params)
 
         #self.gen_train_op = optimizer.apply_gradients(gen_grads)
         #self.disc_train_op = optimizer.apply_gradients(disc_grads)
@@ -188,6 +187,8 @@ class SceneGraphWGAN(object):
     def DataGenerator(self):
         train_path = os.path.join(self.batch_path, "train")
         filenames = [os.path.join(train_path, i) for i in os.listdir(train_path)]
+        #Otherwise we do it in the same order every time
+        random.shuffle(filenames)
         for f in filenames:
             npz = np.load(f)
             big_arr = npz['arr_0']
@@ -385,7 +386,7 @@ class SceneGraphWGAN(object):
                     #Train Critic
                     if iteration == 0:
                         #It takes quite a few iterations to train to optimality the first time
-                        critic_iters = 35
+                        critic_iters = 25
                     else:
                         critic_iters = self.CRITIC_ITERS
                     for i in xrange(critic_iters):

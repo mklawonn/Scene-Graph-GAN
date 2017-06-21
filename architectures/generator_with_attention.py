@@ -114,7 +114,7 @@ class Generator(object):
             logits = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
             #word_prob = tf.nn.softmax(logits)
             word_prob = tf.contrib.distributions.RelaxedOneHotCategorical(soft_gumbel_temp, logits=logits).sample()
-            word_prediction = tf.argmax(logits, 1)
+            word_prediction = tf.argmax(word_prob, 1)
             l.append(word_prob)
 
 
