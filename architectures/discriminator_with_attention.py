@@ -55,7 +55,11 @@ class Discriminator(object):
         #by an average of the annotation vectors fed through two separate MLPs
         h, c = self.get_initial_lstm(tf.reduce_mean(context, 1))#(batch_size, dim_hidden)
 
+        flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])
+        encoded_context = tf.matmul(flattened_context, self.context_encode_W)
         
+        logits_list = []
+
         for ind in range(self.n_lstm_steps):
             current_words = input_triples[:, ind, :]
             current_words = tf.reshape(current_words, [-1, self.vocab_size])
@@ -63,8 +67,7 @@ class Discriminator(object):
             #Calculate \hat{z}
             #Equation (4)
             #Concatenate flattened context with previous hidden state and the noise vector, and feed through attention mlp
-            flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])
-            encoded_context = tf.matmul(flattened_context, self.context_encode_W)
+            #encoded_context = tf.nn.relu(encoded_context)
             context_and_hidden_state = tf.concat([encoded_context, h], 1)
             e = tf.add(tf.matmul(context_and_hidden_state, self.att_W), self.att_b)
             #Equation (5)
@@ -95,8 +98,14 @@ class Discriminator(object):
             h = tf.nn.dropout(h, 0.5)
 
             logits = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
+
+            logits_list.append(logits)
             
-        return logits
+
+        all_logits = tf.stack(logits_list)
+        #We want it in shape [batch_size, seq_len, 1]
+        all_logits = tf.transpose(logits_list, [1,0,2])
+        return all_logits
 
     
 

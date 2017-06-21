@@ -28,6 +28,7 @@ class SceneGraphWGAN(object):
         self.checkpoints_dir = os.path.join(self.logs_dir, "checkpoints/")
         self.summaries_dir = os.path.join(self.logs_dir, "summaries/")
         self.samples_dir = os.path.join(samples_dir, self.configuration)
+        self.initial_gumbel_temp = 2.0
 
         if not os.path.exists(self.checkpoints_dir):
             os.makedirs(self.checkpoints_dir)
@@ -93,10 +94,10 @@ class SceneGraphWGAN(object):
             self.d = Discriminator(self.vocab_size, batch_size = self.BATCH_SIZE)
 
     #def Generator(self, image_feats, noise, init_word_embedding, prev_outputs=None):
-    def Generator(self, image_feats, batch_size, prev_outputs=None):
+    def Generator(self, image_feats, batch_size, gumbel_temp, prev_outputs=None):
         print "Building Generator"
         with tf.variable_scope("Generator", reuse=True) as scope:
-            generated_words = self.g.build_generator(image_feats, batch_size)
+            generated_words = self.g.build_generator(image_feats, batch_size, gumbel_temp)
             return generated_words
 
     def Discriminator(self, triple_input, image_feats):
@@ -111,20 +112,30 @@ class SceneGraphWGAN(object):
         self.real_inputs = tf.placeholder(tf.float32, shape=[None, self.seq_len, self.vocab_size])
         self.image_feats = tf.placeholder(tf.float32, shape=[None, self.image_feat_dim[0], self.image_feat_dim[1]])
         self.batch_size_placeholder = tf.placeholder(tf.int32)
+        self.gumbel_temp = tf.placeholder(tf.float32)
         #self.init_word_embedding = tf.placeholder(tf.float32, shape=[None, self.word_embedding_size])
         #self.noise_placeholder = tf.placeholder(tf.float32, shape=[None, self.image_feat_dim[1]])
 
         #fake_inputs = self.Generator(self.image_feats, self.noise_placeholder, self.init_word_embedding)
-        fake_inputs = self.Generator(self.image_feats, self.batch_size_placeholder)
+        fake_inputs = self.Generator(self.image_feats, self.batch_size_placeholder, self.gumbel_temp)
         #fake_inputs_discrete = tf.argmax(fake_inputs, fake_inputs.get_shape().ndims-1)
 
         self.fake_inputs = fake_inputs
 
-        disc_real = self.Discriminator(self.real_inputs, self.image_feats) 
+        disc_real = self.Discriminator(self.real_inputs, self.image_feats)
         disc_fake = self.Discriminator(fake_inputs, self.image_feats)
 
-        disc_cost = tf.reduce_mean(disc_fake) - tf.reduce_mean(disc_real)
-        gen_cost = -tf.reduce_mean(disc_fake)
+        #First get the average loss over each timestep
+        disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
+        gen_cost = -tf.reduce_mean(disc_fake, axis=1)
+
+        #Then get the loss over the batch
+        disc_cost = tf.reduce_mean(disc_cost)
+        gen_cost = tf.reduce_mean(gen_cost)
+
+        #Then get the loss over the batch
+        #disc_cost = tf.reduce_mean(disc_fake) - tf.reduce_mean(disc_real)
+        #gen_cost = -tf.reduce_mean(disc_fake)
 
         tf.summary.scalar("Discriminator Cost", disc_cost)
         tf.summary.scalar("Generator Cost", gen_cost)
@@ -157,8 +168,11 @@ class SceneGraphWGAN(object):
         #gen_grads = optimizer.compute_gradients(gen_cost, var_list=gen_params)
         #disc_grads = optimizer.compute_gradients(disc_cost, var_list=disc_params)
 
-        self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=gen_params)
-        self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=disc_params)
+        #Switching to RMSProp, does better on non-stationary problems
+        #self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=gen_params)
+        #self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=disc_params)
+        self.gen_train_op = tf.train.RMSPropOptimizer(learning_rate=1e-3).minimize(gen_cost, var_list=gen_params)
+        self.disc_train_op = tf.train.RMSPropOptimizer(learning_rate=1e-3).minimize(disc_cost, var_list=disc_params)
 
         #self.gen_train_op = optimizer.apply_gradients(gen_grads)
         #self.disc_train_op = optimizer.apply_gradients(disc_grads)
@@ -210,7 +224,7 @@ class SceneGraphWGAN(object):
     #is set aside. The extracted features will need to be mapped to the images they came
     #from somehow. Need to figure out how to put real captions beside the generated ones. 
     #Also potentially visualize attention here.
-    def generateSamples(self, session, iteration, im_batch=None):
+    def generateSamples(self, session, iteration, gumbel_temp, im_batch=None):
         iteration = str(iteration)
         #For image in list in eval
         eval_image_path = os.path.join(self.batch_path, "eval")
@@ -242,7 +256,7 @@ class SceneGraphWGAN(object):
                 img = Image.open(f)
             #Generate some amount of triples from the features
             samples = session.run(self.fake_inputs, feed_dict={self.image_feats : im_feats, \
-                self.batch_size_placeholder : batch})
+                self.batch_size_placeholder : batch, self.gumbel_temp : gumbel_temp})
             samples = np.argmax(samples, axis=2)
             decoded_samples = []
             #new_im will contain the original image and the text
@@ -265,7 +279,8 @@ class SceneGraphWGAN(object):
             new_im.paste(img, (0,0))
             new_im.paste(text_im, (224, 0))
             if im_batch is not None:
-                new_im.save(os.path.join(samples_dir, "{}_train.jpg".format(count)))
+                #new_im.save(os.path.join(samples_dir, "{}_train.jpg".format(count)))
+                pass
             else:
                 new_im.save(os.path.join(samples_dir, "{}_eval.jpg".format(count)))
             
@@ -280,7 +295,7 @@ class SceneGraphWGAN(object):
         #Write out the stacked tensor to an image summary
         #tf.summary.image("generated_triples", tensorflow_images, max_outputs = 4)
         
-    def validate(self, session):
+    def validate(self, session, gumbel_temp):
         eval_image_path = os.path.join(self.batch_path, "eval")
         #Pick a random batch of evaluation images
         random_batch_index = np.random.randint(0, 10)
@@ -310,7 +325,7 @@ class SceneGraphWGAN(object):
             noise = np.random.uniform(size=(self.BATCH_SIZE, self.image_feat_dim[1]))
             init_word_embedding = np.zeros((self.BATCH_SIZE, self.word_embedding_size))
             feed_dict = {self.real_inputs:t_batch, self.image_feats:im_batch, \
-                self.batch_size_placeholder : self.BATCH_SIZE}
+                self.batch_size_placeholder : self.BATCH_SIZE, self.gumbel_temp : gumbel_temp}
             _gen_cost = session.run(self.gen_cost, feed_dict=feed_dict)
             _disc_cost = session.run(self.disc_cost, feed_dict=feed_dict)
             gen_total += _gen_cost 
@@ -326,7 +341,7 @@ class SceneGraphWGAN(object):
         self.Loss()
         summary_op = tf.summary.merge_all()
         with tf.Session() as session:
-            loss_print_interval = 50
+            loss_print_interval = 100
             #self.generateSamples(session)
             writer = tf.summary.FileWriter(self.summaries_dir, session.graph)
 
@@ -342,10 +357,15 @@ class SceneGraphWGAN(object):
                 .format(epochs, self.summaries_dir)
 
             start_time = time.time()
+            gumbel_temp = self.initial_gumbel_temp
             for epoch in range(epochs):
                 iteration = 0
                 max_iteration = 0
                 for im_batch, triple_batch, batch_size in self.DataGenerator():
+                    if gumbel_temp <= 0.2:
+                        gumbel_temp = gumbel_temp
+                    else: 
+                        gumbel_temp = self.initial_gumbel_temp - (((epoch*max_iteration)+iteration)*0.0001)
 
                     #noise = np.random.uniform(size=(batch_size, self.image_feat_dim[1]))
                     #init_word_embedding = np.zeros((batch_size, self.word_embedding_size))
@@ -356,21 +376,23 @@ class SceneGraphWGAN(object):
                     #Train Generator
                     if iteration > 0:
                         #Track training statistics every ten iterations
-                        _ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.batch_size_placeholder : batch_size})
+                        _ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.real_inputs : triple_batch,\
+                                            self.batch_size_placeholder : batch_size, self.gumbel_temp : gumbel_temp})
                         #_ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.batch_size_placeholder : batch_size}, options=run_options, run_metadata=run_metadata)
                         #writer.add_run_metadata(run_metadata, "Iteration %d generator" % iteration)
                         #_ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.noise:noise}, options=run_options, run_metadata=run_metadata)
 
                     #Train Critic
                     if iteration == 0:
-                        critic_iters = 30
+                        #It takes quite a few iterations to train to optimality the first time
+                        critic_iters = 35
                     else:
                         critic_iters = self.CRITIC_ITERS
                     for i in xrange(critic_iters):
                         #im_batch, triple_batch = gen.next()
                         _disc_cost, _ = session.run(
                             [self.disc_cost, self.disc_train_op],
-                            feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size}
+                            feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size, self.gumbel_temp : gumbel_temp}
                         )
 
                     if iteration % loss_print_interval == 0:
@@ -381,18 +403,18 @@ class SceneGraphWGAN(object):
                             duration = (stop_time - start_time) / loss_print_interval
                         start_time = stop_time
                         summary, _gen_cost = session.run([summary_op, self.gen_cost], 
-                            feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size})
-                        val_gen, val_disc = self.validate(session)
+                            feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size, self.gumbel_temp : gumbel_temp})
+                        val_gen, val_disc = self.validate(session, gumbel_temp)
                         #_gen_cost = session.run(self.gen_cost, feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.noise:noise})
                         writer.add_summary(summary, iteration)
                         writer.flush()
 
-                        print "Time {}/itr, Step: {}\n Training: generator loss: {}, discriminator loss: {}\n Eval: generator loss: {}, discriminator loss: {}".format(
-                                duration, iteration, _gen_cost, _disc_cost, val_gen, val_disc)
+                        print "Time {}/itr, Step: {}, Gumbel: {}\n Training: generator loss: {}, discriminator loss: {}\n Eval: generator loss: {}, discriminator loss: {}".format(
+                                duration, iteration, gumbel_temp, _gen_cost, _disc_cost, val_gen, val_disc)
 
                     if iteration % print_interval == 0:
-                        self.generateSamples(session, iteration)
-                        self.generateSamples(session, iteration, im_batch=im_batch)
+                        self.generateSamples(session, iteration, gumbel_temp)
+                        self.generateSamples(session, iteration, gumbel_temp, im_batch=im_batch)
                         self.saver.save(session, os.path.join(self.checkpoints_dir, "model.ckpt"), global_step=(epoch*max_iteration)+iteration)
 
                     iteration += 1

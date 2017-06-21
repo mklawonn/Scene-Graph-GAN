@@ -19,7 +19,8 @@ class Generator(object):
 
         #The weights for encoding the context to feed it into the attention MLP
         #Needs to be encoded in order to combine it with the previous hidden state
-        self.context_encode_W = tf.get_variable("context_encode", [self.context_shape[0]*self.context_shape[1], self.context_shape[1]*2], initializer=xavier_initializer)
+        self.context_encode_W = tf.get_variable("context_encode_W", [self.context_shape[0]*self.context_shape[1], self.context_shape[1]*2], initializer=xavier_initializer)
+        self.context_encode_b = tf.get_variable("context_encode_b", [self.context_shape[1]*2], initializer=constant_initializer)
 
         self.noise_emb_W = tf.get_variable("noise_emb_W", [self.noise_dim, self.noise_dim], initializer=xavier_initializer)
         self.noise_emb_b = tf.get_variable("noise_emb_b", [self.noise_dim], initializer=constant_initializer)
@@ -28,11 +29,12 @@ class Generator(object):
         #Stupid stupid hack to allow an initial word embedding to be variable batch_size
         #self.zero_emb = tf.zeros([self.context_shape[1], self.dim_embed], name="zero_emb")
 
-        #self.att_W = tf.get_variable("att_W", [(self.dim_context*2)+self.dim_hidden+self.noise_dim, self.context_shape[0]], initializer=xavier_initializer)
-        self.att_W = tf.get_variable("att_W", [(self.context_shape[1]*2)+self.dim_hidden+self.noise_dim, self.context_shape[0]], initializer=xavier_initializer)
+        #self.att_W = tf.get_variable("att_W", [(self.context_shape[1]*2)+self.dim_hidden+self.noise_dim, self.context_shape[0]], initializer=xavier_initializer)
+        #self.att_b = tf.get_variable("att_b", [self.context_shape[0]], initializer=constant_initializer)
+        self.att_W = tf.get_variable("att_W", [(self.context_shape[1]*2)+self.dim_hidden, self.context_shape[0]], initializer=xavier_initializer)
         self.att_b = tf.get_variable("att_b", [self.context_shape[0]], initializer=constant_initializer)
 
-        self.lstm_W = tf.get_variable("lstm_W", [self.context_shape[1]+self.dim_hidden+self.dim_embed, self.dim_hidden*4], initializer=xavier_initializer)
+        self.lstm_W = tf.get_variable("lstm_W", [self.context_shape[1]+self.dim_hidden+self.dim_embed+self.noise_dim, self.dim_hidden*4], initializer=xavier_initializer)
         self.lstm_b = tf.get_variable("lstm_b", [self.dim_hidden*4], initializer=constant_initializer)
 
         self.init_hidden_W = tf.get_variable("init_hidden_W", [self.context_shape[1], self.dim_hidden], initializer=xavier_initializer)
@@ -54,12 +56,15 @@ class Generator(object):
         return initial_hidden, initial_memory
 
 
-    def build_generator(self, context, batch_size):
+    def build_generator(self, context, batch_size, soft_gumbel_temp):
         flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])
         encoded_context = tf.matmul(flattened_context, self.context_encode_W)
+        #encoded_context = tf.nn.relu(encoded_context)
 
         noise = tf.random_uniform([batch_size, self.noise_dim])
         embedded_noise = tf.add(tf.matmul(noise, self.noise_emb_W), self.noise_emb_b)
+        #embedded_noise = tf.nn.relu(embedded_noise)
+
         h, c = self.get_initial_lstm(tf.reduce_mean(context, 1))#(batch_size, dim_hidden)
 
         l = []
@@ -69,17 +74,24 @@ class Generator(object):
                 #word_emb = tf.matmul(noise, self.zero_emb)
                 word_emb = tf.zeros([batch_size, self.dim_embed])
             else:
-                #word_emb = tf.nn.embedding_lookup(self.Wemb, word_prediction)
-                word_emb = tf.matmul(word_prob, self.Wemb)
+                word_emb = tf.nn.embedding_lookup(self.Wemb, word_prediction)
+                #word_emb = tf.matmul(word_prob, self.Wemb)
 
 
-            context_hidden_state_and_noise = tf.concat([encoded_context, h, embedded_noise], 1)
-            e = tf.add(tf.matmul(context_hidden_state_and_noise, self.att_W), self.att_b)
-            alpha = tf.nn.softmax(e)
-            #alpha = tf.contrib.distributions.RelaxedOneHotCategorical(self.soft_gumbel_temp, logits=e).sample()
+            #context_hidden_state_and_noise = tf.concat([encoded_context, h, embedded_noise], 1)
+            context_hidden_state = tf.concat([encoded_context, h], 1)
+            #e = tf.add(tf.matmul(context_hidden_state_and_noise, self.att_W), self.att_b)
+            e = tf.add(tf.matmul(context_hidden_state, self.att_W), self.att_b)
+            #alpha = tf.nn.softmax(e)
+            #This will vary slightly where the thing looks. Picking the right temperature here changes how deterministic
+            #the attention is
+            alpha = tf.contrib.distributions.RelaxedOneHotCategorical(1.25, logits=e).sample()
             z_hat = tf.reduce_sum(tf.multiply(context, tf.expand_dims(alpha, 2)), axis = 1) #Output is [batch size, D]
             #Concatenate \hat{z}_t , h_{t-1}, and the embedding of the previous word 
-            lstm_input = tf.concat([z_hat, h, word_emb], 1)
+            #Also now trying to add in the noise here as opposed to in the attention model
+            #with the intuition being that we want to look in a slightly random place, but
+            #also then say varying things about that place
+            lstm_input = tf.concat([z_hat, h, word_emb, embedded_noise], 1)
             #Perform affine transformation of concatenated vector
             affine = tf.add(tf.matmul(lstm_input, self.lstm_W), self.lstm_b)
             i, f, o, g = tf.split(affine, 4, 1)
@@ -101,9 +113,8 @@ class Generator(object):
             #Could make the decoding a "deep output layer" by adding another layer
             logits = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
             #word_prob = tf.nn.softmax(logits)
-            #TODO Look at boundary GAN paper
-            word_prob = tf.contrib.distributions.RelaxedOneHotCategorical(self.soft_gumbel_temp, logits=logits).sample()
-            #word_prediction = tf.argmax(logits, 1)
+            word_prob = tf.contrib.distributions.RelaxedOneHotCategorical(soft_gumbel_temp, logits=logits).sample()
+            word_prediction = tf.argmax(logits, 1)
             l.append(word_prob)
 
 

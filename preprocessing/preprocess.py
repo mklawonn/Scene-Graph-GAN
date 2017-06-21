@@ -73,6 +73,8 @@ def normalizeFeatures(train_path, batch_dir):
             #Calculate the per channel std deviation
             temp_std_dev = temp_std_dev + np.std(im_feats, axis=0)
             num_ims += 1.0
+        temp_mean = temp_mean / num_ims
+        temp_std_dev = temp_std_dev / num_ims
         mean = mean + temp_mean
         std_dev = std_dev + temp_std_dev
         file_count += 1.0

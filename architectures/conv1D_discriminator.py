@@ -48,11 +48,11 @@ class Discriminator(object):
         self.conv_3_1 = tf.get_variable("conv_3_1", [3,dim_context[1]+dim_hidden,dim_context[1]+dim_hidden], initializer=he_initializer)
         self.conv_3_2 = tf.get_variable("conv_3_2", [3,dim_context[1]+dim_hidden,dim_context[1]+dim_hidden], initializer=he_initializer)
 
-        self.conv_4_1 = tf.get_variable("conv_4_1", [3,dim_context[1]+dim_hidden,dim_context[1]+dim_hidden], initializer=he_initializer)
+        """self.conv_4_1 = tf.get_variable("conv_4_1", [3,dim_context[1]+dim_hidden,dim_context[1]+dim_hidden], initializer=he_initializer)
         self.conv_4_2 = tf.get_variable("conv_4_2", [3,dim_context[1]+dim_hidden,dim_context[1]+dim_hidden], initializer=he_initializer)
 
         self.conv_5_1 = tf.get_variable("conv_5_1", [3,dim_context[1]+dim_hidden,dim_context[1]+dim_hidden], initializer=he_initializer)
-        self.conv_5_2 = tf.get_variable("conv_5_2", [3,dim_context[1]+dim_hidden,dim_context[1]+dim_hidden], initializer=he_initializer)
+        self.conv_5_2 = tf.get_variable("conv_5_2", [3,dim_context[1]+dim_hidden,dim_context[1]+dim_hidden], initializer=he_initializer)"""
 
         self.output_W_1 = tf.get_variable("output_W_1", [(dim_context[1]+dim_hidden)*seq_len, dim_hidden], initializer=he_initializer)
         self.output_b_1 = tf.get_variable("output_b_1", [dim_hidden], initializer=constant_initializer)
@@ -121,7 +121,7 @@ class Discriminator(object):
         output = tf.nn.conv1d(value=output, filters=self.conv_3_2, stride=1, padding='SAME', data_format='NCHW')
         resnet_input = resnet_input + (0.3*output)
 
-        output = resnet_input
+        """output = resnet_input
         output = tf.nn.relu(output)
         output = tf.nn.conv1d(value=output, filters=self.conv_4_1, stride=1, padding='SAME', data_format='NCHW')
         output = tf.nn.relu(output)
@@ -133,7 +133,7 @@ class Discriminator(object):
         output = tf.nn.conv1d(value=output, filters=self.conv_5_1, stride=1, padding='SAME', data_format='NCHW')
         output = tf.nn.relu(output)
         output = tf.nn.conv1d(value=output, filters=self.conv_5_2, stride=1, padding='SAME', data_format='NCHW')
-        output = resnet_input + (0.3*output)
+        output = resnet_input + (0.3*output)"""
 
         #Output layer to produce logits
         output = tf.reshape(output, [-1, (self.dim_context[1]+self.dim_hidden)*self.seq_len])
