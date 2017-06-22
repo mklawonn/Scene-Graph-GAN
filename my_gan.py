@@ -225,7 +225,7 @@ class SceneGraphWGAN(object):
     #is set aside. The extracted features will need to be mapped to the images they came
     #from somehow. Need to figure out how to put real captions beside the generated ones. 
     #Also potentially visualize attention here.
-    def generateSamples(self, session, iteration, gumbel_temp, im_batch=None):
+    def generateSamples(self, session, iteration, gumbel_temp):
         iteration = str(iteration)
         #For image in list in eval
         eval_image_path = os.path.join(self.batch_path, "eval")
@@ -246,15 +246,8 @@ class SceneGraphWGAN(object):
             batch = 19
             #noise = np.random.uniform(size=(batch, self.image_feat_dim[1]))
             #init_word_embedding = np.zeros((batch, self.word_embedding_size))
-            if im_batch is not None:
-                if count == im_batch.shape[0]:
-                    return
-                im_feats = im_batch[count, : , :]
-                im_feats = np.tile(im_feats, (batch, 1, 1))
-                img = Image.new('RGB', (224, 224))
-            else:
-                im_feats = np.array([filename_to_feats[f]]*batch)
-                img = Image.open(f)
+            im_feats = np.array([filename_to_feats[f]]*batch)
+            img = Image.open(f)
             #Generate some amount of triples from the features
             samples = session.run(self.fake_inputs, feed_dict={self.image_feats : im_feats, \
                 self.batch_size_placeholder : batch, self.gumbel_temp : gumbel_temp})
@@ -279,12 +272,7 @@ class SceneGraphWGAN(object):
             #Paste the original image and text image together
             new_im.paste(img, (0,0))
             new_im.paste(text_im, (224, 0))
-            if im_batch is not None:
-                #new_im.save(os.path.join(samples_dir, "{}_train.jpg".format(count)))
-                pass
-            else:
-                new_im.save(os.path.join(samples_dir, "{}_eval.jpg".format(count)))
-            
+            new_im.save(os.path.join(samples_dir, "{}.jpg".format(count)))
             #Load the combined image as a numpy array
             #new_im.load()
             #new_im = np.array(new_im, dtype=np.float64)
@@ -359,9 +347,9 @@ class SceneGraphWGAN(object):
 
             start_time = time.time()
             gumbel_temp = self.initial_gumbel_temp
+            max_iteration = 0
             for epoch in range(epochs):
                 iteration = 0
-                max_iteration = 0
                 for im_batch, triple_batch, batch_size in self.DataGenerator():
                     if gumbel_temp <= 0.2:
                         gumbel_temp = gumbel_temp
@@ -414,8 +402,7 @@ class SceneGraphWGAN(object):
                                 duration, iteration, gumbel_temp, _gen_cost, _disc_cost, val_gen, val_disc)
 
                     if iteration % print_interval == 0:
-                        self.generateSamples(session, iteration, gumbel_temp)
-                        self.generateSamples(session, iteration, gumbel_temp, im_batch=im_batch)
+                        self.generateSamples(session, ((epoch*max_iteration)+iteration), gumbel_temp)
                         self.saver.save(session, os.path.join(self.checkpoints_dir, "model.ckpt"), global_step=(epoch*max_iteration)+iteration)
 
                     iteration += 1

@@ -95,7 +95,7 @@ class Discriminator(object):
             #h_t = o_t * tanh(c_t)
             h = o * tf.nn.tanh(c)
             #Regularization?
-            h = tf.nn.dropout(h, 0.5)
+            h = tf.nn.dropout(h, keep_prob=0.6)
 
             logits = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
 
