@@ -20,7 +20,8 @@ class Discriminator(object):
 
         #The weights for encoding the context to feed it into the attention MLP
         #Needs to be encoded in order to combine it with the previous hidden state
-        self.context_encode_W = tf.get_variable("context_encode", [self.context_shape[0]*self.context_shape[1], self.dim_context*2], initializer=xavier_initializer)
+        self.context_encode_W = tf.get_variable("context_encode_W", [self.context_shape[0]*self.context_shape[1] + 1, self.dim_context*2], initializer=xavier_initializer)
+        self.context_encode_b = tf.get_variable("context_encode_b", [self.dim_context*2], initializer=constant_initializer)
 
         self.Wemb = tf.get_variable("Wemb", [self.vocab_size, self.dim_embed], initializer=xavier_initializer)
 
@@ -50,13 +51,18 @@ class Discriminator(object):
 
         return initial_hidden, initial_memory
 
-    def build_discriminator(self, context, input_triples):
+    def build_discriminator(self, context, input_triples, batch_size, attributes_flag):
         #From the paper: The initial memory state and hidden state of the LSTM are predicted
         #by an average of the annotation vectors fed through two separate MLPs
         h, c = self.get_initial_lstm(tf.reduce_mean(context, 1))#(batch_size, dim_hidden)
 
+
+        flag = tf.reshape(attributes_flag, [1, 1])
+        flag = tf.tile(flag, [batch_size, 1])
+
         flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])
-        encoded_context = tf.matmul(flattened_context, self.context_encode_W)
+        flattened_context = tf.concat([flattened_context, flag], 1)
+        encoded_context = tf.add(tf.matmul(flattened_context, self.context_encode_W), self.context_encode_b)
         
         logits_list = []
 

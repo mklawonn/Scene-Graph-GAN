@@ -28,7 +28,10 @@ class SceneGraphWGAN(object):
         self.checkpoints_dir = os.path.join(self.logs_dir, "checkpoints/")
         self.summaries_dir = os.path.join(self.logs_dir, "summaries/")
         self.samples_dir = os.path.join(samples_dir, self.configuration)
-        self.initial_gumbel_temp = 2.0
+
+        #For use with the data generator
+        self.attributes_flag = 0.0
+        self.relations_flag = 1.0
 
         if not os.path.exists(self.checkpoints_dir):
             os.makedirs(self.checkpoints_dir)
@@ -51,6 +54,7 @@ class SceneGraphWGAN(object):
         for f in os.listdir(self.samples_dir):
             call(["rm", "-rf", os.path.join(self.samples_dir, f)])
 
+
         #Calculating vocabulary and sequence lengths
         with open(path_to_vocab_json, "r") as f:
             self.vocab = json.load(f)
@@ -69,6 +73,7 @@ class SceneGraphWGAN(object):
         self.CRITIC_ITERS = CRITIC_ITERS
         self.DIM = 512
         self.ITERS = 100000
+        self.INITIAL_GUMBEL_TEMP = 2.0
 
 
         #Import the correct discriminator according to the keyword argument
@@ -94,16 +99,16 @@ class SceneGraphWGAN(object):
             self.d = Discriminator(self.vocab_size, batch_size = self.BATCH_SIZE)
 
     #def Generator(self, image_feats, noise, init_word_embedding, prev_outputs=None):
-    def Generator(self, image_feats, batch_size, gumbel_temp, prev_outputs=None):
+    def Generator(self, image_feats, batch_size, attribute_or_relation, gumbel_temp, prev_outputs=None):
         print "Building Generator"
         with tf.variable_scope("Generator", reuse=True) as scope:
-            generated_words = self.g.build_generator(image_feats, batch_size, gumbel_temp)
+            generated_words = self.g.build_generator(image_feats, batch_size, attribute_or_relation, gumbel_temp)
             return generated_words
 
-    def Discriminator(self, triple_input, image_feats):
+    def Discriminator(self, triple_input, image_feats, batch_size, attribute_or_relation):
         print "Building Discriminator"
         with tf.variable_scope("Discriminator", reuse=True) as scope:
-            logits = self.d.build_discriminator(image_feats, triple_input)
+            logits = self.d.build_discriminator(image_feats, triple_input, batch_size, attribute_or_relation)
             return logits
 
     def Loss(self):
@@ -112,18 +117,19 @@ class SceneGraphWGAN(object):
         self.real_inputs = tf.placeholder(tf.float32, shape=[None, self.seq_len, self.vocab_size])
         self.image_feats = tf.placeholder(tf.float32, shape=[None, self.image_feat_dim[0], self.image_feat_dim[1]])
         self.batch_size_placeholder = tf.placeholder(tf.int32)
+        self.attribute_or_relation = tf.placeholder(tf.float32)
         self.gumbel_temp = tf.placeholder(tf.float32)
         #self.init_word_embedding = tf.placeholder(tf.float32, shape=[None, self.word_embedding_size])
         #self.noise_placeholder = tf.placeholder(tf.float32, shape=[None, self.image_feat_dim[1]])
 
         #fake_inputs = self.Generator(self.image_feats, self.noise_placeholder, self.init_word_embedding)
-        fake_inputs = self.Generator(self.image_feats, self.batch_size_placeholder, self.gumbel_temp)
+        fake_inputs = self.Generator(self.image_feats, self.batch_size_placeholder, self.attribute_or_relation, self.gumbel_temp)
         #fake_inputs_discrete = tf.argmax(fake_inputs, fake_inputs.get_shape().ndims-1)
 
         self.fake_inputs = fake_inputs
 
-        disc_real = self.Discriminator(self.real_inputs, self.image_feats)
-        disc_fake = self.Discriminator(fake_inputs, self.image_feats)
+        disc_real = self.Discriminator(self.real_inputs, self.image_feats, self.batch_size_placeholder, self.attribute_or_relation)
+        disc_fake = self.Discriminator(fake_inputs, self.image_feats, self.batch_size_placeholder, self.attribute_or_relation)
 
         #First get the average loss over each timestep
         disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
@@ -148,7 +154,7 @@ class SceneGraphWGAN(object):
         )
         differences = fake_inputs - self.real_inputs
         interpolates = self.real_inputs + (alpha*differences)
-        gradients = tf.gradients(self.Discriminator(interpolates, self.image_feats), [interpolates])[0]
+        gradients = tf.gradients(self.Discriminator(interpolates, self.image_feats, self.batch_size_placeholder, self.attribute_or_relation), [interpolates])[0]
         slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
         gradient_penalty = tf.reduce_mean((slopes-1.)**2)
         disc_cost += self.LAMBDA*gradient_penalty
@@ -192,34 +198,66 @@ class SceneGraphWGAN(object):
         for f in filenames:
             npz = np.load(f)
             big_arr = npz['arr_0']
-            all_pairs = []
-            for i in xrange(0, big_arr.shape[0], 2):
+            #Generate pairs with images and relations and images and attributes
+            attributes_pairs = []
+            relations_pairs = []
+            for i in xrange(0, big_arr.shape[0], 3):
                 im_feats = big_arr[i]
-                caps = big_arr[i+1]
-                for c in xrange(caps.shape[0]):
-                    all_pairs.append((im_feats, caps[c]))
-            indices = list(range(len(all_pairs)))
-            random.shuffle(indices)
-            while len(indices) > 0:
+                attributes = big_arr[i+1]
+                relations = big_arr[i+2]
+                for a in xrange(attributes.shape[0]):
+                    attributes_pairs.append((im_feats, attributes[a]))
+                for r in xrange(relations.shape[0]):
+                    relations_pairs.append((im_feats, relations[r]))
+            attributes_indices = list(range(len(attributes_pairs)))
+            relations_indices = list(range(len(relations_pairs)))
+            random.shuffle(attributes_indices)
+            random.shuffle(relations_indices)
+
+            while len(attributes_indices) > 0:
                 batch_size = self.BATCH_SIZE
-                if len(indices) >= self.BATCH_SIZE:
-                    im_batch = np.array([all_pairs[i][0] for i in indices[-self.BATCH_SIZE:]], dtype=np.float32)
-                    triple_batch = np.array([all_pairs[i][1] for i in indices[-self.BATCH_SIZE:]])
+                if len(attributes_indices) >= self.BATCH_SIZE:
+                    im_batch = np.array([attributes_pairs[i][0] for i in attributes_indices[-self.BATCH_SIZE:]], dtype=np.float32)
+                    triple_batch = np.array([attributes_pairs[i][1] for i in attributes_indices[-self.BATCH_SIZE:]])
                     t_batch = np.zeros((self.BATCH_SIZE, 3, self.vocab_size), dtype=np.float32)
                     for row in range(t_batch.shape[0]):
                         for token in range(t_batch.shape[1]):
                             t_batch[row, token, triple_batch[row, token]] = 1.0
-                    del indices[-self.BATCH_SIZE:]
+                    del attributes_indices[-self.BATCH_SIZE:]
                 else:
-                    im_batch = np.array([all_pairs[i][0] for i in indices], dtype=np.float32)
-                    triple_batch = np.array([all_pairs[i][1] for i in indices])
-                    t_batch = np.zeros((len(indices), 3, self.vocab_size), dtype=np.float32)
+                    im_batch = np.array([attributes_pairs[i][0] for i in attributes_indices], dtype=np.float32)
+                    triple_batch = np.array([attributes_pairs[i][1] for i in attributes_indices])
+                    t_batch = np.zeros((len(attributes_indices), 3, self.vocab_size), dtype=np.float32)
                     for row in range(t_batch.shape[0]):
                         for token in range(t_batch.shape[1]):
                             t_batch[row, token, triple_batch[row, token]] = 1.0
-                    batch_size = len(indices)
-                    del indices[:]
-                yield im_batch, t_batch, batch_size
+                    batch_size = len(attributes_indices)
+                    del attributes_indices[:]
+                #TODO: Also yield whether or not this batch of pairs uses attributes or relations
+                yield im_batch, t_batch, batch_size, self.attributes_flag
+
+            while len(relations_indices) > 0:
+                batch_size = self.BATCH_SIZE
+                if len(relations_indices) >= self.BATCH_SIZE:
+                    im_batch = np.array([relations_pairs[i][0] for i in relations_indices[-self.BATCH_SIZE:]], dtype=np.float32)
+                    triple_batch = np.array([relations_pairs[i][1] for i in relations_indices[-self.BATCH_SIZE:]])
+                    t_batch = np.zeros((self.BATCH_SIZE, 3, self.vocab_size), dtype=np.float32)
+                    for row in range(t_batch.shape[0]):
+                        for token in range(t_batch.shape[1]):
+                            t_batch[row, token, triple_batch[row, token]] = 1.0
+                    del relations_indices[-self.BATCH_SIZE:]
+                else:
+                    im_batch = np.array([relations_pairs[i][0] for i in relations_indices], dtype=np.float32)
+                    triple_batch = np.array([relations_pairs[i][1] for i in relations_indices])
+                    t_batch = np.zeros((len(relations_indices), 3, self.vocab_size), dtype=np.float32)
+                    for row in range(t_batch.shape[0]):
+                        for token in range(t_batch.shape[1]):
+                            t_batch[row, token, triple_batch[row, token]] = 1.0
+                    batch_size = len(relations_indices)
+                    del relations_indices[:]
+                #TODO: Also yield whether or not this batch of pairs uses attributes or relations
+                yield im_batch, t_batch, batch_size, self.relations_flag
+
 
     #This will require that in the preprocessing phase, a small set of testing images
     #is set aside. The extracted features will need to be mapped to the images they came
@@ -249,8 +287,8 @@ class SceneGraphWGAN(object):
             im_feats = np.array([filename_to_feats[f]]*batch)
             img = Image.open(f)
             #Generate some amount of triples from the features
-            samples = session.run(self.fake_inputs, feed_dict={self.image_feats : im_feats, \
-                self.batch_size_placeholder : batch, self.gumbel_temp : gumbel_temp})
+            samples = session.run(self.fake_inputs, feed_dict={self.image_feats : im_feats,\
+                self.batch_size_placeholder : batch, self.attribute_or_relation : count%2, self.gumbel_temp : gumbel_temp})
             samples = np.argmax(samples, axis=2)
             decoded_samples = []
             #new_im will contain the original image and the text
@@ -290,35 +328,59 @@ class SceneGraphWGAN(object):
         random_batch_index = np.random.randint(0, 10)
         npz = np.load(os.path.join(eval_image_path, "batch_{}.npz".format(random_batch_index)))
         big_arr = npz['arr_0']
-        all_pairs = []
-        for i in xrange(0, big_arr.shape[0], 2):
+        attributes_pairs = []
+        relations_pairs = []
+        for i in xrange(0, big_arr.shape[0], 3):
             im_feats = big_arr[i]
-            caps = big_arr[i+1]
-            for c in xrange(caps.shape[0]):
-                all_pairs.append((im_feats, caps[c]))
-        indices = list(range(len(all_pairs)))
-        random.shuffle(indices)
+            attributes = big_arr[i+1]
+            relations = big_arr[i+2]
+            for a in xrange(attributes.shape[0]):
+                attributes_pairs.append((im_feats, attributes[a]))
+            for r in xrange(relations.shape[0]):
+                relations_pairs.append((im_feats, relations[r]))
+        attributes_indices = list(range(len(attributes_pairs)))
+        relations_indices = list(range(len(relations_pairs)))
+        random.shuffle(attributes_indices)
+        random.shuffle(relations_indices)
         num_losses = 0.0
         gen_total = 0.0
         disc_total = 0.0
-        while len(indices) > self.BATCH_SIZE:
-            im_batch = np.array([all_pairs[i][0] for i in indices[-self.BATCH_SIZE:]], dtype=np.float32)
-            triple_batch = np.array([all_pairs[i][1] for i in indices[-self.BATCH_SIZE:]])
+        while len(attributes_indices) > self.BATCH_SIZE:
+            im_batch = np.array([attributes_pairs[i][0] for i in attributes_indices[-self.BATCH_SIZE:]], dtype=np.float32)
+            triple_batch = np.array([attributes_pairs[i][1] for i in attributes_indices[-self.BATCH_SIZE:]])
             t_batch = np.zeros((self.BATCH_SIZE, 3, self.vocab_size), dtype=np.float32)
             for row in range(t_batch.shape[0]):
                 for token in range(t_batch.shape[1]):
                     t_batch[row, token, triple_batch[row, token]] = 1.0
-            del indices[-self.BATCH_SIZE:]
+            del attributes_indices[-self.BATCH_SIZE:]
             #Run the generator and discriminator loss on this batch
             num_losses += 1.0
             noise = np.random.uniform(size=(self.BATCH_SIZE, self.image_feat_dim[1]))
             init_word_embedding = np.zeros((self.BATCH_SIZE, self.word_embedding_size))
             feed_dict = {self.real_inputs:t_batch, self.image_feats:im_batch, \
-                self.batch_size_placeholder : self.BATCH_SIZE, self.gumbel_temp : gumbel_temp}
+                self.batch_size_placeholder : self.BATCH_SIZE, self.attribute_or_relation : self.attributes_flag, self.gumbel_temp : gumbel_temp}
             _gen_cost = session.run(self.gen_cost, feed_dict=feed_dict)
             _disc_cost = session.run(self.disc_cost, feed_dict=feed_dict)
             gen_total += _gen_cost 
             disc_total += _disc_cost
+        while len(relations_indices) > self.BATCH_SIZE:
+            im_batch = np.array([relations_pairs[i][0] for i in relations_indices[-self.BATCH_SIZE:]], dtype=np.float32)
+            triple_batch = np.array([relations_pairs[i][1] for i in relations_indices[-self.BATCH_SIZE:]])
+            t_batch = np.zeros((self.BATCH_SIZE, 3, self.vocab_size), dtype=np.float32)
+            for row in range(t_batch.shape[0]):
+                for token in range(t_batch.shape[1]):
+                    t_batch[row, token, triple_batch[row, token]] = 1.0
+            del attributes_indices[-self.BATCH_SIZE:]
+            num_losses += 1.0
+            noise = np.random.uniform(size=(self.BATCH_SIZE, self.image_feat_dim[1]))
+            init_word_embedding = np.zeros((self.BATCH_SIZE, self.word_embedding_size))
+            feed_dict = {self.real_inputs:t_batch, self.image_feats:im_batch, \
+                self.batch_size_placeholder : self.BATCH_SIZE, self.attribute_or_relation : self.relations_flag, self.gumbel_temp : gumbel_temp}
+            _gen_cost = session.run(self.gen_cost, feed_dict=feed_dict)
+            _disc_cost = session.run(self.disc_cost, feed_dict=feed_dict)
+            gen_total += _gen_cost 
+            disc_total += _disc_cost
+
         gen_total = gen_total / num_losses
         disc_total = disc_total / num_losses
         return gen_total, disc_total
@@ -346,15 +408,15 @@ class SceneGraphWGAN(object):
                 .format(epochs, self.summaries_dir)
 
             start_time = time.time()
-            gumbel_temp = self.initial_gumbel_temp
+            gumbel_temp = self.INITIAL_GUMBEL_TEMP
             max_iteration = 0
             for epoch in range(epochs):
                 iteration = 0
-                for im_batch, triple_batch, batch_size in self.DataGenerator():
+                for im_batch, triple_batch, batch_size, attributes_relations_flag in self.DataGenerator():
                     if gumbel_temp <= 0.2:
                         gumbel_temp = gumbel_temp
                     else: 
-                        gumbel_temp = self.initial_gumbel_temp - (((epoch*max_iteration)+iteration)*0.0001)
+                        gumbel_temp = self.INITIAL_GUMBEL_TEMP - (((epoch*max_iteration)+iteration)*0.0001)
 
                     #noise = np.random.uniform(size=(batch_size, self.image_feat_dim[1]))
                     #init_word_embedding = np.zeros((batch_size, self.word_embedding_size))
@@ -366,7 +428,7 @@ class SceneGraphWGAN(object):
                     if iteration > 0:
                         #Track training statistics every ten iterations
                         _ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.real_inputs : triple_batch,\
-                                            self.batch_size_placeholder : batch_size, self.gumbel_temp : gumbel_temp})
+                                            self.batch_size_placeholder : batch_size, self.attribute_or_relation : attributes_relations_flag, self.gumbel_temp : gumbel_temp})
                         #_ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.batch_size_placeholder : batch_size}, options=run_options, run_metadata=run_metadata)
                         #writer.add_run_metadata(run_metadata, "Iteration %d generator" % iteration)
                         #_ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.noise:noise}, options=run_options, run_metadata=run_metadata)
@@ -381,7 +443,8 @@ class SceneGraphWGAN(object):
                         #im_batch, triple_batch = gen.next()
                         _disc_cost, _ = session.run(
                             [self.disc_cost, self.disc_train_op],
-                            feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size, self.gumbel_temp : gumbel_temp}
+                            feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size,\
+                                        self.attribute_or_relation : attributes_relations_flag, self.gumbel_temp : gumbel_temp}
                         )
 
                     if iteration % loss_print_interval == 0:
@@ -392,8 +455,10 @@ class SceneGraphWGAN(object):
                             duration = (stop_time - start_time) / loss_print_interval
                         start_time = stop_time
                         summary, _gen_cost = session.run([summary_op, self.gen_cost], 
-                            feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size, self.gumbel_temp : gumbel_temp})
-                        val_gen, val_disc = self.validate(session, gumbel_temp)
+                            feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size,\
+                                        self.attribute_or_relation : attributes_relations_flag, self.gumbel_temp : gumbel_temp})
+                        #val_gen, val_disc = self.validate(session, gumbel_temp)
+                        val_gen, val_disc = "Unknown", "Unknown"
                         #_gen_cost = session.run(self.gen_cost, feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.noise:noise})
                         writer.add_summary(summary, iteration)
                         writer.flush()

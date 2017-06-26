@@ -19,7 +19,7 @@ class Generator(object):
 
         #The weights for encoding the context to feed it into the attention MLP
         #Needs to be encoded in order to combine it with the previous hidden state
-        self.context_encode_W = tf.get_variable("context_encode_W", [self.context_shape[0]*self.context_shape[1], self.context_shape[1]*2], initializer=xavier_initializer)
+        self.context_encode_W = tf.get_variable("context_encode_W", [self.context_shape[0]*self.context_shape[1] + 1, self.context_shape[1]*2], initializer=xavier_initializer)
         self.context_encode_b = tf.get_variable("context_encode_b", [self.context_shape[1]*2], initializer=constant_initializer)
 
         self.noise_emb_W = tf.get_variable("noise_emb_W", [self.noise_dim, self.noise_dim], initializer=xavier_initializer)
@@ -56,9 +56,14 @@ class Generator(object):
         return initial_hidden, initial_memory
 
 
-    def build_generator(self, context, batch_size, soft_gumbel_temp):
+    def build_generator(self, context, batch_size, attributes_flag, soft_gumbel_temp):
+        flag = tf.reshape(attributes_flag, [1, 1])
+        flag = tf.tile(flag, [batch_size, 1])
+
         flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])
-        encoded_context = tf.matmul(flattened_context, self.context_encode_W)
+        flattened_context = tf.concat([flattened_context, flag], 1)
+
+        encoded_context = tf.add(tf.matmul(flattened_context, self.context_encode_W), self.context_encode_b)
         #encoded_context = tf.nn.relu(encoded_context)
 
         noise = tf.random_uniform([batch_size, self.noise_dim])
@@ -85,7 +90,10 @@ class Generator(object):
             #alpha = tf.nn.softmax(e)
             #This will vary slightly where the thing looks. Picking the right temperature here changes how deterministic
             #the attention is
-            alpha = tf.contrib.distributions.RelaxedOneHotCategorical(1.25, logits=e).sample()
+            if i == 0:
+                alpha = tf.contrib.distributions.RelaxedOneHotCategorical(1.0, logits=e).sample()
+            else:
+                alpha = tf.contrib.distributions.RelaxedOneHotCategorical(0.1, logits=e).sample()
             z_hat = tf.reduce_sum(tf.multiply(context, tf.expand_dims(alpha, 2)), axis = 1) #Output is [batch size, D]
             #Concatenate \hat{z}_t , h_{t-1}, and the embedding of the previous word 
             #Also now trying to add in the noise here as opposed to in the attention model

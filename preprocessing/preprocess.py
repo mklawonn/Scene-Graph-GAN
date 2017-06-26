@@ -65,7 +65,7 @@ def normalizeFeatures(train_path, batch_dir):
         num_ims = 0.0
         temp_mean = np.zeros((512))
         temp_std_dev = np.zeros((512))
-        for i in xrange(0, big_arr.shape[0], 2):
+        for i in xrange(0, big_arr.shape[0], 3):
             #Im feats is 196 x 512 when conv is selected
             im_feats = big_arr[i]
             #Calculate the per channel mean
@@ -90,7 +90,7 @@ def normalizeFeatures(train_path, batch_dir):
             continue
         npz = np.load(os.path.join(batch_dir, f))
         big_arr = npz['arr_0']
-        for i in xrange(0, big_arr.shape[0], 2):
+        for i in xrange(0, big_arr.shape[0], 3):
             big_arr[i] -= mean
             big_arr[i] *= (1./std_dev)
         np.savez(os.path.join(batch_dir, f), big_arr)
@@ -244,7 +244,9 @@ def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means
     graph = tf.get_default_graph()
 
     for group in grouper(image_files, chunk_size):
-        attributes_relationships = []
+        #attributes_relationships = []
+        attributes_batch = []
+        relations_batch = []
         images = []
         ids = []
         for im_id in group:
@@ -267,12 +269,16 @@ def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means
             #    continue
             ids.append(im_id)
             images.append(smoothAndNormalizeImg(im, r_mean, g_mean, b_mean))
-            attributes.extend(relations)
+            #attributes.extend(relations)
             encoded_attributes = []
+            encoded_relations = []
             for a in attributes:
                 encoded_attributes.append(encodeTriple(vocab, a[0], a[1], a[2]))
-            attributes_relationships.append(encoded_attributes)
-        #im_placeholder = tf.placeholder("float", [None, 224, 224, 3])
+            for r in relations:
+                encoded_relations.append(encodeTriple(vocab, r[0], r[1], r[2]))
+            #attributes_relationships.append(encoded_attributes)
+            attributes_batch.append(encoded_attributes)
+            relations_batch.append(encoded_relations)
         with tf.Session() as sess:
             init = tf.global_variables_initializer()
             sess.run(init)
@@ -284,7 +290,7 @@ def imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means
         #feats = np.array(feats, dtype=np.float32)
         #Each of these should contain the full chunk_size elements
         #Except for when the generator runs out of files
-        yield feats, ids, attributes_relationships
+        yield feats, ids, attributes_batch, relations_batch
 
 def checkGrayscale(im_path):
     im = Image.open(im_path)
@@ -294,20 +300,22 @@ def checkGrayscale(im_path):
 
 def enoughElements(sg_dict, im_id, vocab):
     attributes, relations = parseSceneGraph(sg_dict[im_id], vocab)
-    return (len(attributes) + len(relations)) >= 10
+    return (len(attributes) > 0 and len(relations) > 0)
 
 def genAndSaveImFeats(path_to_data, path_to_images, image_files, sg_dict, tf_graph, image_means, vocab, batch_size, batch_path, eval = False):
     print "Creating image generator"
     im_generator = imageDataGenerator(path_to_data, image_files, sg_dict, tf_graph, image_means, vocab, chunk_size = batch_size)
     print "Done"
     count = 0
-    for image_feats, id_batch, att_rels_batch in im_generator:
+    for image_feats, id_batch, attributes_batch, relations_batch in im_generator:
         path_to_batch_file = os.path.join(batch_path, "batch_{}.npz".format(count))
         feat_list = [i for i in image_feats]
-        cap_list = [np.array(i) for i in att_rels_batch]
-        save_list = [None]*(len(feat_list)+len(cap_list))
-        save_list[::2] = feat_list
-        save_list[1::2] = cap_list
+        atts_list = [np.array(i) for i in attributes_batch]
+        rels_list = [np.array(i) for i in relations_batch]
+        save_list = [None]*(len(feat_list)+len(atts_list)+len(rels_list))
+        save_list[::3] = feat_list
+        save_list[1::3] = atts_list
+        save_list[2::3] = rels_list
         np.savez(path_to_batch_file, save_list)
         #Do some extra steps for the eval step
         if eval and count == 0:
@@ -336,7 +344,7 @@ def writeFilenameToFeatDict(eval_path):
         big_arr_index = 0
         for name in filenames:
             filename_to_feats[name.strip()] = big_arr[big_arr_index].tolist()
-            big_arr_index += 2
+            big_arr_index += 3
                 
     with open(path_to_dict, "w") as dict_file:
         json.dump(filename_to_feats, dict_file)
@@ -386,12 +394,12 @@ def toNPZ(path_to_data, vgg_tf_model):
                 bad.append(im_id)
         image_files = {im_id:image_files[im_id] for im_id in image_files if im_id not in bad}
         print "Done"
-        with open("image_file_list.json", "w") as f:
+        with open(os.path.join("preprocessing", "image_file_list.json"), "w") as f:
             json.dump(image_files, f)
 
     print "Splitting into training and eval"
-    training_files = dict(image_files.items()[len(image_files)/20:])
-    eval_files = dict(image_files.items()[:len(image_files)/20])
+    training_files = dict(image_files.items()[len(image_files)/10:])
+    eval_files = dict(image_files.items()[:len(image_files)/10])
 
     #Sanity check
     assert len(training_files) > len(eval_files)
