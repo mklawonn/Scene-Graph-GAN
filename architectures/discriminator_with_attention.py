@@ -14,21 +14,25 @@ class Discriminator(object):
         self.n_lstm_steps = n_lstm_steps
         #self.batch_size = batch_size
         self.maxlen = n_lstm_steps
+        self.flag_shape = 512
 
         xavier_initializer = tf.contrib.layers.xavier_initializer()
         constant_initializer = tf.constant_initializer(0.05)
 
         #The weights for encoding the context to feed it into the attention MLP
         #Needs to be encoded in order to combine it with the previous hidden state
-        self.context_encode_W = tf.get_variable("context_encode_W", [self.context_shape[0]*self.context_shape[1] + 1, self.dim_context*2], initializer=xavier_initializer)
+        self.context_encode_W = tf.get_variable("context_encode_W", [self.context_shape[0]*self.context_shape[1], self.dim_context*2], initializer=xavier_initializer)
         self.context_encode_b = tf.get_variable("context_encode_b", [self.dim_context*2], initializer=constant_initializer)
+
+        #self.flag_encode_W = tf.get_variable("flag_encode_W", [self.flag_shape, self.context_shape[1]], initializer=xavier_initializer)
+        #self.flag_encode_b = tf.get_variable("flag_encode_b", [self.context_shape[1]], initializer=constant_initializer)
 
         self.Wemb = tf.get_variable("Wemb", [self.vocab_size, self.dim_embed], initializer=xavier_initializer)
 
         self.att_W = tf.get_variable("att_W", [(self.dim_context*2)+self.dim_hidden, self.context_shape[0]], initializer=xavier_initializer)
         self.att_b = tf.get_variable("att_b", [self.context_shape[0]], initializer=constant_initializer)
 
-        self.lstm_W = tf.get_variable("lstm_W", [self.dim_context+self.dim_hidden+self.dim_embed, self.dim_hidden*4], initializer=xavier_initializer)
+        self.lstm_W = tf.get_variable("lstm_W", [self.dim_context+self.dim_hidden+self.dim_embed+self.flag_shape, self.dim_hidden*4], initializer=xavier_initializer)
         self.lstm_b = tf.get_variable("lstm_b", [self.dim_hidden*4], initializer=constant_initializer)
 
         self.init_hidden_W = tf.get_variable("init_hidden_W", [self.dim_context, self.dim_hidden], initializer=xavier_initializer)
@@ -58,10 +62,10 @@ class Discriminator(object):
 
 
         flag = tf.reshape(attributes_flag, [1, 1])
-        flag = tf.tile(flag, [batch_size, 1])
+        flag = tf.tile(flag, [batch_size, self.flag_shape])
+        #embedded_flag = tf.add(tf.matmul(flag, self.flag_encode_W), self.flag_encode_b)
 
         flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])
-        flattened_context = tf.concat([flattened_context, flag], 1)
         encoded_context = tf.add(tf.matmul(flattened_context, self.context_encode_W), self.context_encode_b)
         
         logits_list = []
@@ -82,7 +86,7 @@ class Discriminator(object):
             z_hat = tf.reduce_sum(context * tf.expand_dims(alpha, 2), 1) #Output is [batch size, D]
             #Equation (1)
             #Concatenate \hat{z}_t , h_{t-1}, and the embedding of the previous word 
-            lstm_input = tf.concat([z_hat, h, word_emb], 1)
+            lstm_input = tf.concat([z_hat, h, word_emb, flag], 1)
             #Perform affine transformation of concatenated vector
             affine = tf.add(tf.matmul(lstm_input, self.lstm_W), self.lstm_b)
             i, f, o, g = tf.split(affine, 4, 1)

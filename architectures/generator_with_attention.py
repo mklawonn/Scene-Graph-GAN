@@ -12,6 +12,7 @@ class Generator(object):
         self.noise_dim = context_shape[1]
         self.dim_embed = dim_embed
         self.soft_gumbel_temp = 0.9
+        self.flag_shape = 512
 
         xavier_initializer = tf.contrib.layers.xavier_initializer()
         he_initializer = tf.contrib.layers.variance_scaling_initializer()
@@ -19,8 +20,11 @@ class Generator(object):
 
         #The weights for encoding the context to feed it into the attention MLP
         #Needs to be encoded in order to combine it with the previous hidden state
-        self.context_encode_W = tf.get_variable("context_encode_W", [self.context_shape[0]*self.context_shape[1] + 1, self.context_shape[1]*2], initializer=xavier_initializer)
+        self.context_encode_W = tf.get_variable("context_encode_W", [self.context_shape[0]*self.context_shape[1], self.context_shape[1]*2], initializer=xavier_initializer)
         self.context_encode_b = tf.get_variable("context_encode_b", [self.context_shape[1]*2], initializer=constant_initializer)
+
+        #self.flag_encode_W = tf.get_variable("flag_encode_W", [self.flag_shape, self.context_shape[1]], initializer=xavier_initializer)
+        #self.flag_encode_b = tf.get_variable("flag_encode_b", [self.context_shape[1]], initializer=constant_initializer)
 
         self.noise_emb_W = tf.get_variable("noise_emb_W", [self.noise_dim, self.noise_dim], initializer=xavier_initializer)
         self.noise_emb_b = tf.get_variable("noise_emb_b", [self.noise_dim], initializer=constant_initializer)
@@ -34,7 +38,7 @@ class Generator(object):
         self.att_W = tf.get_variable("att_W", [(self.context_shape[1]*2)+self.dim_hidden, self.context_shape[0]], initializer=xavier_initializer)
         self.att_b = tf.get_variable("att_b", [self.context_shape[0]], initializer=constant_initializer)
 
-        self.lstm_W = tf.get_variable("lstm_W", [self.context_shape[1]+self.dim_hidden+self.dim_embed+self.noise_dim, self.dim_hidden*4], initializer=xavier_initializer)
+        self.lstm_W = tf.get_variable("lstm_W", [self.context_shape[1]+self.dim_hidden+self.dim_embed+self.noise_dim+self.flag_shape, self.dim_hidden*4], initializer=xavier_initializer)
         self.lstm_b = tf.get_variable("lstm_b", [self.dim_hidden*4], initializer=constant_initializer)
 
         self.init_hidden_W = tf.get_variable("init_hidden_W", [self.context_shape[1], self.dim_hidden], initializer=xavier_initializer)
@@ -58,11 +62,10 @@ class Generator(object):
 
     def build_generator(self, context, batch_size, attributes_flag, soft_gumbel_temp):
         flag = tf.reshape(attributes_flag, [1, 1])
-        flag = tf.tile(flag, [batch_size, 1])
+        flag = tf.tile(flag, [batch_size, self.flag_shape])
+        #embedded_flag = tf.add(tf.matmul(flag, self.flag_encode_W), self.flag_encode_b)
 
         flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])
-        flattened_context = tf.concat([flattened_context, flag], 1)
-
         encoded_context = tf.add(tf.matmul(flattened_context, self.context_encode_W), self.context_encode_b)
         #encoded_context = tf.nn.relu(encoded_context)
 
@@ -99,7 +102,7 @@ class Generator(object):
             #Also now trying to add in the noise here as opposed to in the attention model
             #with the intuition being that we want to look in a slightly random place, but
             #also then say varying things about that place
-            lstm_input = tf.concat([z_hat, h, word_emb, embedded_noise], 1)
+            lstm_input = tf.concat([z_hat, h, word_emb, embedded_noise, flag], 1)
             #Perform affine transformation of concatenated vector
             affine = tf.add(tf.matmul(lstm_input, self.lstm_W), self.lstm_b)
             i, f, o, g = tf.split(affine, 4, 1)

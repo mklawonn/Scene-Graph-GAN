@@ -233,7 +233,6 @@ class SceneGraphWGAN(object):
                             t_batch[row, token, triple_batch[row, token]] = 1.0
                     batch_size = len(attributes_indices)
                     del attributes_indices[:]
-                #TODO: Also yield whether or not this batch of pairs uses attributes or relations
                 yield im_batch, t_batch, batch_size, self.attributes_flag
 
             while len(relations_indices) > 0:
@@ -255,7 +254,6 @@ class SceneGraphWGAN(object):
                             t_batch[row, token, triple_batch[row, token]] = 1.0
                     batch_size = len(relations_indices)
                     del relations_indices[:]
-                #TODO: Also yield whether or not this batch of pairs uses attributes or relations
                 yield im_batch, t_batch, batch_size, self.relations_flag
 
 
@@ -288,7 +286,7 @@ class SceneGraphWGAN(object):
             img = Image.open(f)
             #Generate some amount of triples from the features
             samples = session.run(self.fake_inputs, feed_dict={self.image_feats : im_feats,\
-                self.batch_size_placeholder : batch, self.attribute_or_relation : count%2, self.gumbel_temp : gumbel_temp})
+                self.batch_size_placeholder : batch, self.attribute_or_relation : float(count%2), self.gumbel_temp : gumbel_temp})
             samples = np.argmax(samples, axis=2)
             decoded_samples = []
             #new_im will contain the original image and the text
