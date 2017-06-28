@@ -112,7 +112,7 @@ class Discriminator(object):
             logits_list.append(logits)
             
 
-        all_logits = tf.stack(logits_list)
+        #all_logits = tf.stack(logits_list)
         #We want it in shape [batch_size, seq_len, 1]
         all_logits = tf.transpose(logits_list, [1,0,2])
         return all_logits

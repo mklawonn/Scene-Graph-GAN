@@ -1,4 +1,13 @@
+import json
+
+import numpy as np
 import tensorflow as tf
+
+attributes_flag = 0.0
+relations_flag = 1.0
+
+vocab = {}
+decoder = {}
 
 class Entity(object):
     def __init__(self, ):
@@ -16,21 +25,127 @@ class Graph(object):
         self.nodes = []
 
 #Function to read in the model
-def
+def loadModel(path_to_checkpoints):
+    sess = tf.Session()
+    checkpoint = tf.train.get_checkpoint_state(path_to_checkpoints)
+    if checkpoint and checkpoint.model_checkpoint_path:
+        saver = tf.train.import_meta_graph("{}.meta".format(checkpoint.model_checkpoint_path))
+        saver.restore(sess, tf.train.latest_checkpoint(path_to_checkpoints))
+    else:
+        print "ERROR: Could not load model"
+        exit(1)
+    graph = tf.get_default_graph()
+    return sess, graph
+
+def readVocab():
+    global vocab
+    global decoder
+    with open("preprocessing/vocab.json", "r") as f:
+        vocab = json.load(f)
+    decoder = {y[0]:x for x, y in vocab.iteritems()}
+
+#Function to load filename to feature dict for later use
+def getFilenameToFeatDict(batch_path):
+    #For image in list in eval
+    eval_image_path = os.path.join(batch_path, "eval")
+    #Load the filename to feats dictionary
+    path_to_dict = os.path.join(eval_image_path, "filename_to_feats_dict.json")
+    with open(path_to_dict, 'r') as f:
+        filename_to_feats = json.load(f)
+    with open(os.path.join(eval_image_path, "filenames.txt"), 'r') as f:
+        filenames = [line.strip() for line in f]
+    return filename_to_feats, filenames
 
 #Function to generate a bunch of triples (attributes and relations) along with the attention
 #vector associated with each subject, predicate, and object
-def
+def generateTriples(sess, graph, image_feats, num_per_image = 75):
+
+    generator_output = graph.get_tensor_by_name("Generator_1/transpose:0")
+    discriminator_output = graph.get_tensor_by_name("Discriminator_2/transpose:0")
+    attention_1 = graph.get_tensor_by_name("Generator_1/RelaxedOneHotCategorical_1/sample/Reshape:0")
+    attention_2 = graph.get_tensor_by_name("Generator_1/RelaxedOneHotCategorical_5/sample/Reshape:0")
+    attention_3 = graph.get_tensor_by_name("Generator_1/RelaxedOneHotCategorical_9/sample/Reshape:0")
+
+    #real_inputs = graph.get_tensor_by_name("Placeholder:0")
+    image_feats_placeholder = graph.get_tensor_by_name("Placeholder_1:0")
+    batch_size_placeholder = graph.get_tensor_by_name("Placeholder_2:0")
+    attribute_or_relation = graph.get_tensor_by_name("Placeholder_3:0")
+    gumbel_temp = graph.get_tensor_by_name("Placeholder_4:0")
+
+    batch_size = num_per_image
+
+    attribute_feed_dict = {image_feats : image_feats,  batch_size_placeholder : batch_size, attribute_or_relation : attributes_flag, gumbel_temp : 0.2}
+    relation_feed_dict = {image_feats : image_feats, batch_size_placeholder : batch_size, attribute_or_relation : relations_flag, gumbel_temp : 0.2}
+    attribute, a_score, a_attention_1, a_attention_2, a_attention_3 =\
+        sess.run([generator_output, discriminator_output, attention_1, attention_2, attention_3], feed_dict = attribute_feed_dict)
+    attribute = np.argmax(attribute, axis=2)
+    a_score = np.sum(a_score, axis=1)
+    relation, r_score, r_attention_1, r_attention_2, r_attention_3 =\
+        sess.run([generator_output, discriminator_output, attention_1, attention_2, attention_3], feed_dict = relation_feed_dict)
+    relation = np.argmax(relation, axis=2)
+    r_score = np.sum(r_score, axis=1)
+
+    a_attention_vectors = np.transpose(np.array([a_attention_1, a_attention_2, a_attention_3]), (1, 0, 2))
+    r_attention_vectors = np.transpose(np.array([r_attention_1, r_attention_2, r_attention_3]), (1, 0, 2))
+
+    attributes = [(attribute[i], a_attention_vectors[i], score[i]) for i in range(attribute.shape[0])]
+    relations = [(relation[i], r_attention_vectors[i], score[i]) for i in range(relation.shape[0])]
+
+    return attributes, relations
+
+
+#Function to determine range of discriminator scores for ground truth triples
+#Returns a threshold calculated as 1.5 standard deviations lower than the mean score
+#assigned to a ground truth triple. This score will be used as the minimum value that
+#a generated triple must achieve in order to be added to the graph
+def determineThreshold(sess, graph, ground_truth_features):
+
+    attribute_logits = []
+    relation_logits = []
+
+    discriminator_output = graph.get_tensor_by_name("Discriminator_1/transpose:0")
+
+    real_inputs = graph.get_tensor_by_name("Placeholder:0")
+    image_feats = graph.get_tensor_by_name("Placeholder_1:0")
+    batch_size_placeholder = graph.get_tensor_by_name("Placeholder_2:0")
+    attribute_or_relation = graph.get_tensor_by_name("Placeholder_3:0")
+    gumbel_temp = graph.get_tensor_by_name("Placeholder_4:0")
+
+    for i in range(0, ground_truth_features.shape[0], 3):
+        feats = ground_truth_features[i]
+        attributes = ground_truth_features[i+1]
+        relations = ground_truth_features[i+2]
+        attribute_feed_dict = {real_inputs : attributes, image_feats : feats, batch_size_placeholder : attributes.shape[0], attribute_or_relation : attributes_flag, gumbel_temp = 0.2}
+        relation_feed_dict = {real_inputs : relations, image_feats : feats, batch_size_placeholder : relations.shape[0], attribute_or_relation : relations_flag, gumbel_temp = 0.2}
+        attribute_logits.extend(np.sum(sess.run(discriminator_output, feed_dict = attribute_feed_dict), axis=1).tolist())
+        relation_logits.extend(np.sum(sess.run(discriminator_output, feed_dict = relation_feed_dict), axis=1).tolist())
+
+    attribute_std_dev = np.std(attribute_logits)
+    attribute_mean = np.mean(attribute_logits)
+
+    return mean - (1.5*std_dev)
 
 #Function to filter out low score triples using the discriminator
-def
+def filterTriples(threshold, triple_score_pairs):
+    filtered_pairs = []
+    for pair in triple_score_pairs:
+        if pair[1] >= threshold:
+            filtered_pairs.append(pair)
+    return filtered_pairs
 
 #Given two attention vectors, function to determine how similar they are
 #For each vector, produces an ordered ranking of indices based on the size of
 #the value at that index.
 #Then returns True or False based on how many common indices appear in each vector's top
 #ten ranking. True if that number is greater than some threshold, False otherwise
-def
+def similarEnough(att_1, att_2, top_n=15, threshold=10):
+    order_1 = np.argsort(att_1).tolist()
+    order_2 = np.argsort(att_2).tolist()
+
+    order_1 = set(order_1[:15])
+    order_2 = set(order_2[:15])
+
+    return len(order_1.intersection(order_2)) >= threshold
 
 #Function to return list of all entities in a list of triples
 #Assigns a unique identifier to each entity
@@ -49,7 +164,7 @@ def findAllEntities(triples):
 #entity resolution
 def determineCountability(entity):
 
-#Function to determine all potential duplicate entity pairs based on name
+#Function to determine all potential duplicate entity pairs
 def determinePotentialDuplicates(all_entities):
 
 #Function to resolve duplicate pairs,
@@ -90,21 +205,24 @@ def resolveDuplicateEntities(all_entities, potential_duplicates):
 def generateGraph(all_entities):
 
 #Main function
-def main(path_to_model, path_to_image_features):
-#Read in the model
+def main(path_to_model_checkpoints, batch_path):
+    #Read in the model
+    sess, graph  = loadModel(path_to_model_checkpoints)
 
-#Get a list of all features for which you want to generate the triples
+    #Get a list of all features for which you want to generate the triples
+    filename_to_feats, filenames = getFilenameToFeatDict(batch_path)
 
-#For each feature
-    #Generate triples and attention vectors
-    #Filter out low probability triples via discriminator
-    #Find all entities in the triples
-    all_entities = findAllEntities(triples)
-    #Determine potential duplicate entities
-    potential_duplicates = determinePotentialDuplicates(all_entities)
-    #Determine which of the entities are duplicates and save the new all_entities 
-    all_entities = resolveDuplicateEntities(all_entities, potential_duplicates)
-    #Generate graph from this final list of entities
-    graph = generateGraph(all_entities)
-    #Add graph to list of graphs
-    #Generate image of scene graph next to the original image
+    #For each feature
+    for filename, feature in filename_to_feats.iteritems():
+        #Generate triples and attention vectors
+        #Filter out low probability triples via discriminator
+        #Find all entities in the triples
+        all_entities = findAllEntities(triples)
+        #Determine potential duplicate entities
+        potential_duplicates = determinePotentialDuplicates(all_entities)
+        #Determine which of the entities are duplicates and save the new all_entities 
+        all_entities = resolveDuplicateEntities(all_entities, potential_duplicates)
+        #Generate graph from this final list of entities
+        graph = generateGraph(all_entities)
+        #Add graph to list of graphs
+        #Generate image of scene graph next to the original image

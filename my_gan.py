@@ -174,8 +174,8 @@ class SceneGraphWGAN(object):
         #gen_grads = optimizer.compute_gradients(gen_cost, var_list=gen_params)
         #disc_grads = optimizer.compute_gradients(disc_cost, var_list=disc_params)
 
-        self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=gen_params)
-        self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=disc_params)
+        self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Generator_Adam").minimize(gen_cost, var_list=gen_params)
+        self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Discriminator_Adam").minimize(disc_cost, var_list=disc_params)
         #self.gen_train_op = tf.train.RMSPropOptimizer(learning_rate=1e-4).minimize(gen_cost, var_list=gen_params)
         #self.disc_train_op = tf.train.RMSPropOptimizer(learning_rate=1e-3).minimize(disc_cost, var_list=disc_params)
 
