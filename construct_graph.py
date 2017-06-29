@@ -1,4 +1,5 @@
 import json
+import itertools
 
 import numpy as np
 import tensorflow as tf
@@ -8,17 +9,53 @@ relations_flag = 1.0
 
 vocab = {}
 decoder = {}
+entity_identifier = 0
 
 class Entity(object):
-    def __init__(self, ):
-        self.unique_id = 
-        #Relations in which this entity is the subject
-        self.subject_relations = 
-        #Relations in which this entity is the object 
-        self.object_relations =
-        self.attributes = 
+    def __init__(self, unique_id, vocab_index):
+        self.unique_id = unique_id
+        self.vocab_index = vocab_index
+        self.attributes = []
         self.duplicates = [self.unique_id]
-        self.type = 
+        #self.type? 
+
+    def addAttribute(self, attribute):
+        self.attributes.append(attribute)
+
+    def decodeAttributes(self):
+        return [" ".join(decoder[self.vocab_index], "be.v.01", decoder[att.vocab_index]) for att in self.attributes]
+
+class Attribute(object):
+    def __init__(self, vocab_index):
+        self.vocab_index = vocab_index
+
+class Triple(object):
+    def __init__(self, triple, attention_vector, disc_score, is_attribute=True):
+        global entity_identifier
+
+        self.is_attribute = is_attribute
+        #self.triple = triple
+        self.attention_vector = attention_vector
+        self.disc_score = disc_score
+
+        if is_attribute:
+            self.subject = Entity(entity_identifier, triple[0])
+            self.predicate = triple[1]
+            self.object = Attribute(triple[2])
+            self.subject.addAttribute(self.object)
+        else:
+            #Otherwise it's a relation
+            self.subject = Entity(entity_identifier, triple[0])
+            entity_identifier += 1
+            self.predicate = triple[1]
+            self.object = Entity(entity_identifier, triple[2])
+            entity_identifier += 1
+
+        self.triple = [self.subject, self.predicate, self.object]
+
+    def decode(self):
+        global decoder
+        return " ".join(decoder[self.subject.vocab_index], decoder[self.predicate], decoder[self.object.vocab_index])
 
 class Graph(object):
     def __init__(self, ):
@@ -88,10 +125,10 @@ def generateTriples(sess, graph, image_feats, num_per_image = 75):
     a_attention_vectors = np.transpose(np.array([a_attention_1, a_attention_2, a_attention_3]), (1, 0, 2))
     r_attention_vectors = np.transpose(np.array([r_attention_1, r_attention_2, r_attention_3]), (1, 0, 2))
 
-    attributes = [(attribute[i], a_attention_vectors[i], score[i]) for i in range(attribute.shape[0])]
-    relations = [(relation[i], r_attention_vectors[i], score[i]) for i in range(relation.shape[0])]
+    attributes = [Triple(attribute[i], a_attention_vectors[i], score[i], is_attribute=True) for i in range(attribute.shape[0])]
+    relations = [Triple(relation[i], r_attention_vectors[i], score[i], is_attribute=False) for i in range(relation.shape[0])]
 
-    return attributes, relations
+    return attributes.extend(relations)
 
 
 #Function to determine range of discriminator scores for ground truth triples
@@ -126,51 +163,52 @@ def determineThreshold(sess, graph, ground_truth_features):
     return mean - (1.5*std_dev)
 
 #Function to filter out low score triples using the discriminator
-def filterTriples(threshold, triple_score_pairs):
-    filtered_pairs = []
-    for pair in triple_score_pairs:
-        if pair[1] >= threshold:
-            filtered_pairs.append(pair)
-    return filtered_pairs
+def filterTriples(threshold, triples):
+    filtered_triples = []
+    for t in triples:
+        if t.disc_score >= threshold:
+            filtered_pairs.append(t)
+    return filtered_triples
 
 #Given two attention vectors, function to determine how similar they are
-#For each vector, produces an ordered ranking of indices based on the size of
-#the value at that index.
-#Then returns True or False based on how many common indices appear in each vector's top
-#ten ranking. True if that number is greater than some threshold, False otherwise
-def similarEnough(att_1, att_2, top_n=15, threshold=10):
-    order_1 = np.argsort(att_1).tolist()
-    order_2 = np.argsort(att_2).tolist()
+#using the generalized Jaccard similarity. The Jaccard similarity must be greater
+#than or equal to a specified threshold to return True
+def similarEnough(att_1, att_2, threshold = 0.75):
+    intersection = sum(map(lambda x, y : min(x,y), att_1.tolist(), att_2.tolist()))
+    union = sum(map(lambda x, y : max(x,y), att_1.tolist(), att_2.tolist()))
 
-    order_1 = set(order_1[:15])
-    order_2 = set(order_2[:15])
-
-    return len(order_1.intersection(order_2)) >= threshold
-
+    return (intersection / union) >= threshold
+        
 #Function to return list of all entities in a list of triples
 #Assigns a unique identifier to each entity
 def findAllEntities(triples):
-    identifier = 0
-    all_entities = []
+    all_entities = {}
+    #Keep track of which triple it came from to replace duplicates later
+    triple_index = 0
     for t in triples:
-        #If triple is a relation
-        ##Add subject and object to all_entities
-        #Else
-        ##Add subject to all_entities
-        identifier += 1
+        if t.is_attribute:
+            all_entities[t.subject] = (triple_index, 0)
+        else:
+            all_entities.append(t.subject)
+            all_entities[t.subject] = (triple_index, 0)
+            all_entities.append(t.object)
+            all_entities[t.object] = (triple_index, 2)
+        triple_index += 1
+    return all_entities
 
 #Function to determine the countability of an entity
 #If either is uncountable (e.g snow, water, grass) then no need to perform
 #entity resolution
-def determineCountability(entity):
+#def determineCountability(entity):
 
 #Function to determine all potential duplicate entity pairs
-def determinePotentialDuplicates(all_entities):
+#Currently just returns all pairs, might be smarter to do something else
+def determinePotentialDuplicates(all_entities_list):
+    return list(itertools.combinations(all_entities_list, 2))
 
 #Function to resolve duplicate pairs,
-#returns a list of all actual entities
-def resolveDuplicateEntities(all_entities, potential_duplicates):
-    #Initialize list of all entities from potential duplicate entities list
+#TODO: Alters the triples in place
+def resolveDuplicateEntities(potential_duplicates, triples):
     #For each pair of potential duplicate entities:
     ##Determine if the entity in question is countable
     ##If not, continue
@@ -206,20 +244,26 @@ def generateGraph(all_entities):
 
 #Main function
 def main(path_to_model_checkpoints, batch_path):
+    readVocab()
     #Read in the model
     sess, graph  = loadModel(path_to_model_checkpoints)
 
     #Get a list of all features for which you want to generate the triples
     filename_to_feats, filenames = getFilenameToFeatDict(batch_path)
 
-    #For each feature
+    threshold = determineThreshold(sess, graph, ground_truth_features)
+
+    #For each image in the filenames to feats dict
     for filename, feature in filename_to_feats.iteritems():
-        #Generate triples and attention vectors
+        #Generate triples. Each returned triple object has a subject, predicate, and object,
+        #along with an attention vector and score.
+        triples = generateTriples(sess, graph, feature, num_per_image = 75):
         #Filter out low probability triples via discriminator
+        triples = filterTriples(threshold, triples)
         #Find all entities in the triples
         all_entities = findAllEntities(triples)
         #Determine potential duplicate entities
-        potential_duplicates = determinePotentialDuplicates(all_entities)
+        potential_duplicates = determinePotentialDuplicates(list(all_entities))
         #Determine which of the entities are duplicates and save the new all_entities 
         all_entities = resolveDuplicateEntities(all_entities, potential_duplicates)
         #Generate graph from this final list of entities
