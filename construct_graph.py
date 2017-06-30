@@ -211,15 +211,16 @@ def determineThreshold(sess, graph, ground_truth_features):
             attribute_feed_dict = {real_inputs : t_batch, image_feats : im_batch, batch_size_placeholder : batch_size, attribute_or_relation : attributes_flag, gumbel_temp : 0.2}
             attribute_logits.extend(np.sum(sess.run(discriminator_output, feed_dict = attribute_feed_dict), axis=1).tolist())
         else:
+            continue
             im_batch = np.array([attributes_pairs[i][0] for i in attributes_indices], dtype=np.float32)
             triple_batch = np.array([attributes_pairs[i][1] for i in attributes_indices])
             t_batch = np.zeros((len(attributes_indices), 3, len(vocab)), dtype=np.float32)
             for row in range(t_batch.shape[0]):
                 for token in range(t_batch.shape[1]):
                     t_batch[row, token, triple_batch[row, token]] = 1.0
-            del attributes_indices[:]
             attribute_feed_dict = {real_inputs : t_batch, image_feats : im_batch, batch_size_placeholder : len(attributes_indices), attribute_or_relation : attributes_flag, gumbel_temp : 0.2}
             attribute_logits.extend(np.sum(sess.run(discriminator_output, feed_dict = attribute_feed_dict), axis=1).tolist())
+            del attributes_indices[:]
 
     while len(relations_indices) > 0:
         if len(relations_indices) >= batch_size:
@@ -239,9 +240,9 @@ def determineThreshold(sess, graph, ground_truth_features):
             for row in range(t_batch.shape[0]):
                 for token in range(t_batch.shape[1]):
                     t_batch[row, token, triple_batch[row, token]] = 1.0
-            del relations_indices[:]
             relation_feed_dict = {real_inputs : t_batch, image_feats : im_batch, batch_size_placeholder : len(relations_indices), attribute_or_relation : relations_flag, gumbel_temp : 0.2}
             relation_logits.extend(np.sum(sess.run(discriminator_output, feed_dict = relation_feed_dict), axis=1).tolist())
+            del relations_indices[:]
     
     attribute_std_dev = np.std(attribute_logits)
     attribute_mean = np.mean(attribute_logits)
