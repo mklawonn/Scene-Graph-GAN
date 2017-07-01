@@ -5,6 +5,7 @@ samples/*
 tensorflow_venv/
 tensorflow_venv/*
 preprocessing/vocab.json
+preprocessing/image_file_list.json
 config.txt
 *.swp
 *.pyc
