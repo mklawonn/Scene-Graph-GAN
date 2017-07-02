@@ -33,10 +33,10 @@ class Generator(object):
         #Stupid stupid hack to allow an initial word embedding to be variable batch_size
         #self.zero_emb = tf.zeros([self.context_shape[1], self.dim_embed], name="zero_emb")
 
-        #self.att_W = tf.get_variable("att_W", [(self.context_shape[1]*2)+self.dim_hidden+self.noise_dim, self.context_shape[0]], initializer=xavier_initializer)
-        #self.att_b = tf.get_variable("att_b", [self.context_shape[0]], initializer=constant_initializer)
-        self.att_W = tf.get_variable("att_W", [(self.context_shape[1]*2)+self.dim_hidden, self.context_shape[0]], initializer=xavier_initializer)
+        self.att_W = tf.get_variable("att_W", [(self.context_shape[1]*2)+self.dim_hidden+self.noise_dim, self.context_shape[0]], initializer=xavier_initializer)
         self.att_b = tf.get_variable("att_b", [self.context_shape[0]], initializer=constant_initializer)
+        #self.att_W = tf.get_variable("att_W", [(self.context_shape[1]*2)+self.dim_hidden, self.context_shape[0]], initializer=xavier_initializer)
+        #self.att_b = tf.get_variable("att_b", [self.context_shape[0]], initializer=constant_initializer)
 
         self.lstm_W = tf.get_variable("lstm_W", [self.context_shape[1]+self.dim_hidden+self.dim_embed+self.noise_dim+self.flag_shape, self.dim_hidden*4], initializer=xavier_initializer)
         self.lstm_b = tf.get_variable("lstm_b", [self.dim_hidden*4], initializer=constant_initializer)
@@ -47,8 +47,15 @@ class Generator(object):
         self.init_memory_W = tf.get_variable("init_memory_W", [self.context_shape[1], self.dim_hidden], initializer=xavier_initializer)
         self.init_memory_b = tf.get_variable("init_memory_b", [self.dim_hidden], initializer=constant_initializer)
 
-        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.vocab_size], initializer=xavier_initializer)
-        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.vocab_size], initializer=constant_initializer)
+        #self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.vocab_size], initializer=xavier_initializer)
+        #self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.vocab_size], initializer=constant_initializer)
+
+        #Now doing the deep output layer
+        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.dim_embed], initializer=xavier_initializer)
+        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.dim_embed], initializer=constant_initializer)
+
+        self.decode_word_W = tf.get_variable("decode_word_W", [self.dim_embed, self.vocab_size], initializer=xavier_initializer)
+        self.decode_word_b = tf.get_variable("decode_word_b", [self.vocab_size], initializer=constant_initializer)
 
     def get_initial_lstm(self, mean_context):
         #From the paper: "The initial memory state and hidden state of the LSTM are predicted by an average
@@ -86,17 +93,17 @@ class Generator(object):
                 #word_emb = tf.matmul(word_prob, self.Wemb)
 
 
-            #context_hidden_state_and_noise = tf.concat([encoded_context, h, embedded_noise], 1)
-            context_hidden_state = tf.concat([encoded_context, h], 1)
+            context_hidden_state_and_noise = tf.concat([encoded_context, h, embedded_noise], 1)
+            #context_hidden_state = tf.concat([encoded_context, h], 1)
             #e = tf.add(tf.matmul(context_hidden_state_and_noise, self.att_W), self.att_b)
-            e = tf.add(tf.matmul(context_hidden_state, self.att_W), self.att_b)
-            #alpha = tf.nn.softmax(e)
+            e = tf.add(tf.matmul(context_hidden_state_and_noise, self.att_W), self.att_b)
+            alpha = tf.nn.softmax(e)
             #This will vary slightly where the thing looks. Picking the right temperature here changes how deterministic
             #the attention is
-            if i == 0:
+            """if i == 0:
                 alpha = tf.contrib.distributions.RelaxedOneHotCategorical(1.0, logits=e).sample()
             else:
-                alpha = tf.contrib.distributions.RelaxedOneHotCategorical(0.1, logits=e).sample()
+                alpha = tf.contrib.distributions.RelaxedOneHotCategorical(0.1, logits=e).sample()"""
             z_hat = tf.reduce_sum(tf.multiply(context, tf.expand_dims(alpha, 2)), axis = 1) #Output is [batch size, D]
             #Concatenate \hat{z}_t , h_{t-1}, and the embedding of the previous word 
             #Also now trying to add in the noise here as opposed to in the attention model
@@ -123,8 +130,10 @@ class Generator(object):
 
             #Could make the decoding a "deep output layer" by adding another layer
             logits = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
+            logit_words = tf.add(tf.matmul(logits, self.decode_word_W), self.decode_word_b)
             #word_prob = tf.nn.softmax(logits)
-            word_prob = tf.contrib.distributions.RelaxedOneHotCategorical(soft_gumbel_temp, logits=logits).sample()
+            word_prob = tf.nn.softmax(logit_words)
+            #word_prob = tf.contrib.distributions.RelaxedOneHotCategorical(soft_gumbel_temp, logits=logits).sample()
             word_prediction = tf.argmax(word_prob, 1)
             l.append(word_prob)
 

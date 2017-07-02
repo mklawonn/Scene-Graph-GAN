@@ -5,7 +5,7 @@ import numpy as np
 
 class Discriminator(object):
 
-    def __init__(self, vocab_size, dim_embed=512, dim_context=512, dim_hidden=512, n_lstm_steps=3, batch_size=64, context_shape=[196,512], bias_init_vector=None):
+    def __init__(self, vocab_size, dim_embed=300, dim_context=512, dim_hidden=512, n_lstm_steps=3, batch_size=64, context_shape=[196,512], bias_init_vector=None):
         self.vocab_size = vocab_size
         self.dim_embed = dim_embed
         self.dim_context = dim_context
@@ -41,8 +41,16 @@ class Discriminator(object):
         self.init_memory_W = tf.get_variable("init_memory_W", [self.dim_context, self.dim_hidden], initializer=xavier_initializer)
         self.init_memory_b = tf.get_variable("init_memory_b", [self.dim_hidden], initializer=constant_initializer)
 
-        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, 1], initializer=xavier_initializer)
-        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [1], initializer=constant_initializer)
+        #self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, 1], initializer=xavier_initializer)
+        #self.decode_lstm_b = tf.get_variable("decode_lstm_b", [1], initializer=constant_initializer)
+
+        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.dim_embed], initializer=xavier_initializer)
+        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.dim_embed], initializer=constant_initializer)
+
+        self.decode_word_W = tf.get_variable("decode_word_W", [self.dim_embed, 1], initializer=xavier_initializer)
+        self.decode_word_b = tf.get_variable("decode_word_b", [1], initializer=constant_initializer)
+
+        
 
         
 
@@ -109,7 +117,9 @@ class Discriminator(object):
 
             logits = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
 
-            logits_list.append(logits)
+            logit_words = tf.add(tf.matmul(logits, self.decode_word_W), self.decode_word_b)
+
+            logits_list.append(logit_words)
             
 
         #all_logits = tf.stack(logits_list)
