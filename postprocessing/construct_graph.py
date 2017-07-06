@@ -1,11 +1,18 @@
+import os, sys
+sys.path.append(os.getcwd())
+
 import json
 import itertools
 import collections
-import os
 import random
+import operator
 
 import numpy as np
 import tensorflow as tf
+
+from PIL import Image
+from PIL import ImageFont
+from PIL import ImageDraw
 
 attributes_flag = 0.0
 relations_flag = 1.0
@@ -18,9 +25,9 @@ class Entity(object):
     def __init__(self, unique_id, vocab_index):
         self.unique_id = unique_id
         self.og_vocab_index = vocab_index
-        self.vocab_indices = [vocab_index]
+        self.vocab_indices = {vocab_index : 1}
         self.attributes = []
-        self.duplicates = [self.unique_id]
+        #self.duplicates = [self.unique_id]
         #self.type? 
 
     def addAttribute(self, attribute):
@@ -31,7 +38,8 @@ class Entity(object):
 
     def getName(self):
         global decoder
-        index = collections.Counter(self.vocab_indices).most_common(1)
+        #index = collections.Counter(self.vocab_indices).most_common(1)
+        index = sorted(self.vocab_indices.items(), key=operator.itemgetter(1), reverse=True)[0][0]
         return "{}_{}".format(decoder[index], self.unique_id)
 
     def decodeAttributes(self):
@@ -67,9 +75,9 @@ class Triple(object):
     def decode(self):
         global decoder
         if self.is_attribute:
-            return " ".join(self.triple[0].getName(), decoder[self.triple[1]], decoder[self.triple[2]])
+            return " ".join([self.triple[0].getName(), decoder[self.triple[1]], decoder[self.triple[2].vocab_index]])
         else:
-            return " ".join(self.triple[0].getName(), decoder[self.triple[1]], self.triple[2].getName())
+            return " ".join([self.triple[0].getName(), decoder[self.triple[1]], self.triple[2].getName()])
 
 """class Graph(object):
     def __init__(self, ):
@@ -128,11 +136,15 @@ def loadGroundTruthFeatures(batch_path):
 #vector associated with each subject, predicate, and object
 def generateTriples(sess, graph, image_feats, num_per_image = 75):
 
-    generator_output = graph.get_tensor_by_name("Generator_1/transpose:0")
-    discriminator_output = graph.get_tensor_by_name("Discriminator_2/transpose:0")
-    attention_1 = graph.get_tensor_by_name("Generator_1/RelaxedOneHotCategorical_1/sample/Reshape:0")
-    attention_2 = graph.get_tensor_by_name("Generator_1/RelaxedOneHotCategorical_5/sample/Reshape:0")
-    attention_3 = graph.get_tensor_by_name("Generator_1/RelaxedOneHotCategorical_9/sample/Reshape:0")
+    image_feats = np.reshape(image_feats, (1, 196, 512))
+    image_feats = np.tile(image_feats, (num_per_image, 1, 1))
+
+    #TODO: Get actual names now that they've been renamed
+    #generator_output = graph.get_tensor_by_name("Generator_1/transpose:0")
+    #discriminator_output = graph.get_tensor_by_name("Discriminator_2/transpose:0")
+    #attention_1 = graph.get_tensor_by_name("Generator_1/RelaxedOneHotCategorical_1/sample/Reshape:0")
+    #attention_2 = graph.get_tensor_by_name("Generator_1/RelaxedOneHotCategorical_5/sample/Reshape:0")
+    #attention_3 = graph.get_tensor_by_name("Generator_1/RelaxedOneHotCategorical_9/sample/Reshape:0")
 
     #real_inputs = graph.get_tensor_by_name("Placeholder:0")
     image_feats_placeholder = graph.get_tensor_by_name("Placeholder_1:0")
@@ -142,8 +154,8 @@ def generateTriples(sess, graph, image_feats, num_per_image = 75):
 
     batch_size = num_per_image
 
-    attribute_feed_dict = {image_feats : image_feats,  batch_size_placeholder : batch_size, attribute_or_relation : attributes_flag, gumbel_temp : 0.2}
-    relation_feed_dict = {image_feats : image_feats, batch_size_placeholder : batch_size, attribute_or_relation : relations_flag, gumbel_temp : 0.2}
+    attribute_feed_dict = {image_feats_placeholder : image_feats,  batch_size_placeholder : batch_size, attribute_or_relation : attributes_flag, gumbel_temp : 0.2}
+    relation_feed_dict = {image_feats_placeholder : image_feats, batch_size_placeholder : batch_size, attribute_or_relation : relations_flag, gumbel_temp : 0.2}
     attribute, a_score, a_attention_1, a_attention_2, a_attention_3 =\
         sess.run([generator_output, discriminator_output, attention_1, attention_2, attention_3], feed_dict = attribute_feed_dict)
     attribute = np.argmax(attribute, axis=2)
@@ -156,20 +168,29 @@ def generateTriples(sess, graph, image_feats, num_per_image = 75):
     a_attention_vectors = np.transpose(np.array([a_attention_1, a_attention_2, a_attention_3]), (1, 0, 2))
     r_attention_vectors = np.transpose(np.array([r_attention_1, r_attention_2, r_attention_3]), (1, 0, 2))
 
-    attributes = [Triple(attribute[i], a_attention_vectors[i], score[i], is_attribute=True) for i in range(attribute.shape[0])]
-    relations = [Triple(relation[i], r_attention_vectors[i], score[i], is_attribute=False) for i in range(relation.shape[0])]
+    attributes = [Triple(attribute[i], a_attention_vectors[i], a_score[i], is_attribute=True) for i in range(attribute.shape[0])]
+    relations = [Triple(relation[i], r_attention_vectors[i], r_score[i], is_attribute=False) for i in range(relation.shape[0])]
 
-    return attributes.extend(relations)
+    attributes.extend(relations)
+
+    return attributes
 
 
 #Function to determine range of discriminator scores for ground truth triples
 #Returns a threshold calculated as 1.5 standard deviations lower than the mean score
 #assigned to a ground truth triple. This score will be used as the minimum value that
 #a generated triple must achieve in order to be added to the graph
-def determineThreshold(sess, graph, ground_truth_features):
+def determineThreshold(sess, graph, ground_truth_features, path_to_threshold_file):
     global vocab
     global attributes_flag
     global relations_flag
+
+    if os.path.exists(path_to_threshold_file):
+        with open(path_to_threshold_file, "r") as f:
+            lines = f.readlines()
+            att_threshold = float(lines[0].strip())
+            rel_threshold = float(lines[1].strip())
+            return att_threshold, rel_threshold
 
     attribute_logits = []
     relation_logits = []
@@ -211,7 +232,6 @@ def determineThreshold(sess, graph, ground_truth_features):
             attribute_feed_dict = {real_inputs : t_batch, image_feats : im_batch, batch_size_placeholder : batch_size, attribute_or_relation : attributes_flag, gumbel_temp : 0.2}
             attribute_logits.extend(np.sum(sess.run(discriminator_output, feed_dict = attribute_feed_dict), axis=1).tolist())
         else:
-            continue
             im_batch = np.array([attributes_pairs[i][0] for i in attributes_indices], dtype=np.float32)
             triple_batch = np.array([attributes_pairs[i][1] for i in attributes_indices])
             t_batch = np.zeros((len(attributes_indices), 3, len(vocab)), dtype=np.float32)
@@ -249,7 +269,8 @@ def determineThreshold(sess, graph, ground_truth_features):
     relation_std_dev = np.std(relation_logits)
     relation_mean = np.mean(relation_logits)
 
-    return (attribute_mean - (1.5*attribute_std_dev)), (relation_mean - (1.5*relation_std_dev))
+    return float((attribute_mean + (0.2*attribute_std_dev))), float((relation_mean + (0.2*relation_std_dev)))
+    #return float(attribute_mean), float(relation_mean)
 
 #Function to filter out low score triples using the discriminator
 def filterTriples(attribute_threshold, relation_threshold, triples):
@@ -266,10 +287,10 @@ def filterTriples(attribute_threshold, relation_threshold, triples):
 #Given two attention vectors, function to determine how similar they are
 #using the generalized Jaccard similarity. The Jaccard similarity must be greater
 #than or equal to a specified threshold to return True
-def similarEnough(att_1, att_2, threshold = 0.75):
+def similarEnough(att_1, att_2, threshold = 0.99):
     intersection = sum(map(lambda x, y : min(x,y), att_1.tolist(), att_2.tolist()))
     union = sum(map(lambda x, y : max(x,y), att_1.tolist(), att_2.tolist()))
-
+    
     return (intersection / union) >= threshold
         
 #Function to return list of all entities in a list of triples
@@ -282,9 +303,7 @@ def findAllEntities(triples):
         if t.is_attribute:
             all_entities[t.subject] = (triple_index, 0)
         else:
-            all_entities.append(t.subject)
             all_entities[t.subject] = (triple_index, 0)
-            all_entities.append(t.object)
             all_entities[t.object] = (triple_index, 2)
         triple_index += 1
     return all_entities
@@ -304,6 +323,7 @@ def determinePotentialDuplicates(all_entities_list):
 #TODO: I'm sure I should be using a better data structure here
 def resolveDuplicateEntities(potential_duplicates, all_entities, triples):
     #For each pair of potential duplicate entities:
+    count = 0
     for pair in potential_duplicates:
         #Each pair is a tuple of entity objects
         #Determine if the entity in question is countable
@@ -317,32 +337,47 @@ def resolveDuplicateEntities(potential_duplicates, all_entities, triples):
         if similarEnough(att_1, att_2):
             #If they are the same, replace entity_1 in the triples list with entity_0
             #Make sure to extend entity_0s vocab_index list with the deleted triple's vocab_index first
-            deleted_entitys_names = triples[all_entities[pair[1]][0]].triple[all_entities[pair[1]][1]].vocab_indices
+            #deleted_entitys_names = triples[all_entities[pair[1]][0]].triple[all_entities[pair[1]][1]].vocab_indices
+            deleted_entitys_names = pair[1].vocab_indices
+            for x in deleted_entitys_names:
+                if x in triples[all_entities[pair[0]][0]].triple[all_entities[pair[0]][1]].vocab_indices:
+                    triples[all_entities[pair[0]][0]].triple[all_entities[pair[0]][1]].vocab_indices[x] += deleted_entitys_names[x]
+                else:
+                    triples[all_entities[pair[0]][0]].triple[all_entities[pair[0]][1]].vocab_indices[x] = deleted_entitys_names[x]
 
-            triples[all_entities[pair[0]][0]].triple[all_entities[pair[0]][1]].vocab_indices.extend(deleted_entitys_names)
-            
             #Now do the actual replacement
-            triples[all_entities[pair[1]][0]].triple[all_entites[pair[1]][1]] = triples[all_entites[pair[0]][0]].triple[all_entities[pair[0]][1]]
+            triples[all_entities[pair[1]][0]].triple[all_entities[pair[1]][1]] = triples[all_entities[pair[0]][0]].triple[all_entities[pair[0]][1]]
+        count += 1
+        del att_1
+        del att_2
+        del deleted_entitys_names
 
 def generateSamples(filename, triples, count):
-        samples_dir = os.path.join("./samples", "scene_graph_samples")
-        if not os.path.exists(samples_dir):
-            os.makedirs(samples_dir)
+    samples_dir = os.path.join("./samples", "scene_graph_samples")
+    if not os.path.exists(samples_dir):
+        os.makedirs(samples_dir)
 
-        img = Image.open(f)
-        new_im = Image.new('RGB', (224 + 300, 224))
-        img = img.resize((224, 224), Image.ANTIALIAS)
+    img = Image.open(filename)
+    new_im = Image.new('RGB', (224 + 300, 224))
+    img = img.resize((224, 224), Image.ANTIALIAS)
 
-        text_im = Image.new('RGB', (300, 224))
-        draw = Image.Draw.Draw(text_im)
-        position = 0
-        for t in triples:
-            s = t.decode()
-            draw.text((10, 2 + (10*position)), s)
-            position += 1
-        new_im.paste(img, (0,0))
-        new_im.paste(text_im, (224, 0))
-        new_im.save(os.path.join(samples_dir, "{}.jpg".format(count)))
+    text_im = Image.new('RGB', (300, 224))
+    draw = ImageDraw.Draw(text_im)
+    position = 0
+    for t in triples:
+        s = t.decode()
+        draw.text((10, 2 + (10*position)), s)
+        position += 1
+    new_im.paste(img, (0,0))
+    new_im.paste(text_im, (224, 0))
+    new_im.save(os.path.join(samples_dir, "{}.jpg".format(count)))
+
+def writeThreshold(path_to_threshold_file, attribute_threshold, relation_threshold):
+    with open(path_to_threshold_file, "w") as f:
+        f.write(str(attribute_threshold))
+        f.write("\n")
+        f.write(str(relation_threshold))
+        f.write("\n")
 
 #Main function
 def main(path_to_model_checkpoints, batch_path):
@@ -361,8 +396,13 @@ def main(path_to_model_checkpoints, batch_path):
     ground_truth_features = loadGroundTruthFeatures(batch_path)
     print "Done"
 
+    path_to_threshold_file = os.path.join("./postprocessing", "threshold.txt")
     print "Determining threshold"
-    attribute_threshold, relation_threshold = determineThreshold(sess, graph, ground_truth_features)
+    attribute_threshold, relation_threshold = determineThreshold(sess, graph, ground_truth_features, path_to_threshold_file)
+    print "Done"
+
+    print "Writing threshold to file"
+    writeThreshold(path_to_threshold_file, attribute_threshold, relation_threshold)
     print "Done"
 
     count = 0
@@ -374,6 +414,8 @@ def main(path_to_model_checkpoints, batch_path):
         triples = generateTriples(sess, graph, feature, num_per_image = 75)
         #Filter out low probability triples via discriminator
         triples = filterTriples(attribute_threshold, relation_threshold, triples)
+        for t in triples:
+            print t.decode()
         #Find all entities in the triples
         all_entities = findAllEntities(triples)
         #Determine potential duplicate entities
@@ -385,7 +427,11 @@ def main(path_to_model_checkpoints, batch_path):
         #Add graph to list of graphs
         #Generate image of scene graph next to the original image
         generateSamples(filename, triples, count)
+        del triples
+        del all_entities
+        del potential_duplicates
         count += 1
+        break
 
 
 if __name__ == "__main__":

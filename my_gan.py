@@ -132,6 +132,7 @@ class SceneGraphWGAN(object):
         disc_fake = self.Discriminator(fake_inputs, self.image_feats, self.batch_size_placeholder, self.attribute_or_relation)
 
         #First get the average loss over each timestep
+        #TODO: Instead of average, maybe sum?
         disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
         gen_cost = -tf.reduce_mean(disc_fake, axis=1)
 
@@ -390,7 +391,7 @@ class SceneGraphWGAN(object):
         self.Loss()
         summary_op = tf.summary.merge_all()
         with tf.Session() as session:
-            loss_print_interval = 100
+            loss_print_interval = 50
             #self.generateSamples(session)
             writer = tf.summary.FileWriter(self.summaries_dir, session.graph)
 
@@ -431,19 +432,24 @@ class SceneGraphWGAN(object):
                         #writer.add_run_metadata(run_metadata, "Iteration %d generator" % iteration)
                         #_ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.noise:noise}, options=run_options, run_metadata=run_metadata)
 
-                    #Train Critic
-                    if iteration == 0:
-                        #It takes quite a few iterations to train to optimality the first time
-                        critic_iters = 25
-                    else:
-                        critic_iters = self.CRITIC_ITERS
-                    for i in xrange(critic_iters):
+                    #Start out low so that the discriminator at least has to do pretty well
+                    old_disc_cost = -0.1
+                    #iters_so_far = 0
+                    while True:
                         #im_batch, triple_batch = gen.next()
                         _disc_cost, _ = session.run(
                             [self.disc_cost, self.disc_train_op],
                             feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size,\
                                         self.attribute_or_relation : attributes_relations_flag, self.gumbel_temp : gumbel_temp}
                         )
+                        change = np.abs(_disc_cost - old_disc_cost)
+                        old_disc_cost = _disc_cost
+                        #Some loose measure of convergence
+                        #if _disc_cost < -0.1 and change < 0.001:
+                        #if change < 0.00001 or iters_so_far > self.CRITIC_ITERS:
+                        if change < 1e-5:
+                            break
+                        #iters_so_far += 1
 
                     if iteration % loss_print_interval == 0:
                         stop_time = time.time()

@@ -18,6 +18,8 @@ class Discriminator(object):
 
         xavier_initializer = tf.contrib.layers.xavier_initializer()
         constant_initializer = tf.constant_initializer(0.05)
+        alpha_initializer = tf.constant_initializer(1)
+        beta_initializer = tf.constant_initializer(0)
 
         #The weights for encoding the context to feed it into the attention MLP
         #Needs to be encoded in order to combine it with the previous hidden state
@@ -35,39 +37,78 @@ class Discriminator(object):
         self.lstm_W = tf.get_variable("lstm_W", [self.dim_context+self.dim_hidden+self.dim_embed+self.flag_shape, self.dim_hidden*4], initializer=xavier_initializer)
         self.lstm_b = tf.get_variable("lstm_b", [self.dim_hidden*4], initializer=constant_initializer)
 
-        self.init_hidden_W = tf.get_variable("init_hidden_W", [self.dim_context, self.dim_hidden], initializer=xavier_initializer)
+        #self.init_hidden_W = tf.get_variable("init_hidden_W", [self.dim_context, self.dim_hidden], initializer=xavier_initializer)
+        #self.init_hidden_b = tf.get_variable("init_hidden_b", [self.dim_hidden], initializer=constant_initializer)
+
+        #self.init_memory_W = tf.get_variable("init_memory_W", [self.dim_context, self.dim_hidden], initializer=xavier_initializer)
+        #self.init_memory_b = tf.get_variable("init_memory_b", [self.dim_hidden], initializer=constant_initializer)
+
+        self.init_hidden_W = tf.get_variable("init_hidden_W", [self.dim_context + self.vocab_size, self.dim_hidden], initializer=xavier_initializer)
         self.init_hidden_b = tf.get_variable("init_hidden_b", [self.dim_hidden], initializer=constant_initializer)
 
-        self.init_memory_W = tf.get_variable("init_memory_W", [self.dim_context, self.dim_hidden], initializer=xavier_initializer)
+        self.init_memory_W = tf.get_variable("init_memory_W", [self.dim_context + self.vocab_size, self.dim_hidden], initializer=xavier_initializer)
         self.init_memory_b = tf.get_variable("init_memory_b", [self.dim_hidden], initializer=constant_initializer)
 
-        #self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, 1], initializer=xavier_initializer)
-        #self.decode_lstm_b = tf.get_variable("decode_lstm_b", [1], initializer=constant_initializer)
+        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, 1], initializer=xavier_initializer)
+        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [1], initializer=constant_initializer)
 
-        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.dim_embed], initializer=xavier_initializer)
-        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.dim_embed], initializer=constant_initializer)
+        #Uncomment the next four lines of code for a deep output layer
+        #self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.dim_embed], initializer=xavier_initializer)
+        #self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.dim_embed], initializer=constant_initializer)
 
-        self.decode_word_W = tf.get_variable("decode_word_W", [self.dim_embed, 1], initializer=xavier_initializer)
-        self.decode_word_b = tf.get_variable("decode_word_b", [1], initializer=constant_initializer)
+        #self.decode_word_W = tf.get_variable("decode_word_W", [self.dim_embed, 1], initializer=xavier_initializer)
+        #self.decode_word_b = tf.get_variable("decode_word_b", [1], initializer=constant_initializer)
+
+        #For layer normalization:
+        self.init_hidden_alpha = tf.get_variable("init_hidden/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
+        self.init_hidden_beta = tf.get_variable("init_hidden/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
+
+        self.init_memory_alpha = tf.get_variable("init_memory/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
+        self.init_memory_beta = tf.get_variable("init_memory/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
+
+        self.encoded_context_alpha = tf.get_variable("encoded_context/LN/alpha", shape=[self.context_shape[1]*2], initializer = alpha_initializer)
+        self.encoded_context_beta = tf.get_variable("encoded_context/LN/beta", shape=[self.context_shape[1]*2], initializer = beta_initializer)
+
+        self.i_alpha = tf.get_variable("i/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
+        self.i_beta = tf.get_variable("i/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
+
+        self.f_alpha = tf.get_variable("f/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
+        self.f_beta = tf.get_variable("f/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
+
+        self.o_alpha = tf.get_variable("o/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
+        self.o_beta = tf.get_variable("o/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
+
+        self.g_alpha = tf.get_variable("g/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
+        self.g_beta = tf.get_variable("g/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
+
 
         
+    def layer_normalization(self, inputs, scale, shift, epsilon = 1e-5):
+        mean, var = tf.nn.moments(inputs, [1], keep_dims = True)
 
-        
+        normalized = scale * (inputs - mean) / tf.sqrt(var + epsilon) + shift
+        return normalized
 
-    def get_initial_lstm(self, mean_context):
+
+    def get_initial_lstm(self, mean_context, first_word):
         #From the paper: "The initial memory state and hidden state of the LSTM are predicted by an average
         #of the annotation vectors fed through two separate MLPs (init,c and init,h)"
         #This is done via the mean_context ops
-        initial_hidden = tf.nn.tanh(tf.matmul(mean_context, self.init_hidden_W) + self.init_hidden_b)
-        initial_memory = tf.nn.tanh(tf.matmul(mean_context, self.init_memory_W) + self.init_memory_b)
+        context_and_word = tf.concat([mean_context, first_word], axis=1)
+        initial_hidden = tf.add(tf.matmul(context_and_word, self.init_hidden_W), self.init_hidden_b)
+        initial_hidden = self.layer_normalization(initial_hidden, self.init_hidden_alpha, self.init_hidden_beta)
+        initial_hidden = tf.nn.tanh(initial_hidden)
+        initial_memory = tf.add(tf.matmul(context_and_word, self.init_memory_W), self.init_memory_b)
+        initial_memory = self.layer_normalization(initial_memory, self.init_memory_alpha, self.init_memory_beta)
+        initial_memory = tf.nn.tanh(initial_memory)
 
         return initial_hidden, initial_memory
 
     def build_discriminator(self, context, input_triples, batch_size, attributes_flag):
         #From the paper: The initial memory state and hidden state of the LSTM are predicted
         #by an average of the annotation vectors fed through two separate MLPs
-        h, c = self.get_initial_lstm(tf.reduce_mean(context, 1))#(batch_size, dim_hidden)
-
+        first_word = input_triples[:, 0, :]
+        h, c = self.get_initial_lstm(tf.reduce_mean(context, 1), first_word)#(batch_size, dim_hidden)
 
         flag = tf.reshape(attributes_flag, [1, 1])
         flag = tf.tile(flag, [batch_size, self.flag_shape])
@@ -75,6 +116,7 @@ class Discriminator(object):
 
         flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])
         encoded_context = tf.add(tf.matmul(flattened_context, self.context_encode_W), self.context_encode_b)
+        encoded_context = self.layer_normalization(encoded_context, self.encoded_context_alpha, self.encoded_context_beta)
         
         logits_list = []
 
@@ -99,12 +141,16 @@ class Discriminator(object):
             affine = tf.add(tf.matmul(lstm_input, self.lstm_W), self.lstm_b)
             i, f, o, g = tf.split(affine, 4, 1)
             #i_t = sigmoid(affine)
+            i = self.layer_normalization(i, self.i_alpha, self.i_beta)
             i = tf.nn.sigmoid(i)
             #f_t = sigmoid(affine)
+            f = self.layer_normalization(f, self.f_alpha, self.f_beta)
             f = tf.nn.sigmoid(f)
             #o_t = sigmoid(affine)
+            o = self.layer_normalization(o, self.o_alpha, self.o_beta)
             o = tf.nn.sigmoid(o)
             #g_t = tanh(affine)
+            g = self.layer_normalization(g, self.g_alpha, self.g_beta)
             g = tf.nn.tanh(g)
 
             #Equation (2)
@@ -112,19 +158,17 @@ class Discriminator(object):
             c = f * c + i * g
             #h_t = o_t * tanh(c_t)
             h = o * tf.nn.tanh(c)
-            #Regularization?
-            h = tf.nn.dropout(h, keep_prob=0.6)
 
             logits = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
 
-            logit_words = tf.add(tf.matmul(logits, self.decode_word_W), self.decode_word_b)
+            #logit_words = tf.add(tf.matmul(logits, self.decode_word_W), self.decode_word_b)
 
-            logits_list.append(logit_words)
+            logits_list.append(logits)
             
 
         #all_logits = tf.stack(logits_list)
         #We want it in shape [batch_size, seq_len, 1]
-        all_logits = tf.transpose(logits_list, [1,0,2])
+        all_logits = tf.transpose(logits_list, [1,0,2], name="all_logits")
         return all_logits
 
     
