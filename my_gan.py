@@ -178,7 +178,7 @@ class SceneGraphWGAN(object):
         self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Generator_Adam").minimize(gen_cost, var_list=gen_params)
         self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Discriminator_Adam").minimize(disc_cost, var_list=disc_params)
         #self.gen_train_op = tf.train.RMSPropOptimizer(learning_rate=1e-4).minimize(gen_cost, var_list=gen_params)
-        #self.disc_train_op = tf.train.RMSPropOptimizer(learning_rate=1e-3).minimize(disc_cost, var_list=disc_params)
+        #self.disc_train_op = tf.train.RMSPropOptimizer(learning_rate=1e-4).minimize(disc_cost, var_list=disc_params)
 
         #self.gen_train_op = optimizer.apply_gradients(gen_grads)
         #self.disc_train_op = optimizer.apply_gradients(disc_grads)
@@ -196,12 +196,12 @@ class SceneGraphWGAN(object):
         filenames = [os.path.join(train_path, i) for i in os.listdir(train_path)]
         #Otherwise we do it in the same order every time
         random.shuffle(filenames)
+        attributes_pairs = []
+        relations_pairs = []
         for f in filenames:
             npz = np.load(f)
             big_arr = npz['arr_0']
             #Generate pairs with images and relations and images and attributes
-            attributes_pairs = []
-            relations_pairs = []
             for i in xrange(0, big_arr.shape[0], 3):
                 im_feats = big_arr[i]
                 attributes = big_arr[i+1]
@@ -210,13 +210,18 @@ class SceneGraphWGAN(object):
                     attributes_pairs.append((im_feats, attributes[a]))
                 for r in xrange(relations.shape[0]):
                     relations_pairs.append((im_feats, relations[r]))
-            attributes_indices = list(range(len(attributes_pairs)))
-            relations_indices = list(range(len(relations_pairs)))
-            random.shuffle(attributes_indices)
-            random.shuffle(relations_indices)
 
-            while len(attributes_indices) > 0:
-                batch_size = self.BATCH_SIZE
+        attributes_indices = list(range(len(attributes_pairs)))
+        relations_indices = list(range(len(relations_pairs)))
+        random.shuffle(attributes_indices)
+        random.shuffle(relations_indices)
+
+        print "Data has been read, there are {} attribute-image pairs and {} relation-image pairs".format(len(attributes_indices), len(relations_indices))
+
+        while len(attributes_indices) + len(relations_indices) > 0:
+            #while len(attributes_indices) > 0:
+            batch_size = self.BATCH_SIZE
+            if len(attributes_indices) > 0:
                 if len(attributes_indices) >= self.BATCH_SIZE:
                     im_batch = np.array([attributes_pairs[i][0] for i in attributes_indices[-self.BATCH_SIZE:]], dtype=np.float32)
                     triple_batch = np.array([attributes_pairs[i][1] for i in attributes_indices[-self.BATCH_SIZE:]])
@@ -236,8 +241,9 @@ class SceneGraphWGAN(object):
                     del attributes_indices[:]
                 yield im_batch, t_batch, batch_size, self.attributes_flag
 
-            while len(relations_indices) > 0:
-                batch_size = self.BATCH_SIZE
+            #while len(relations_indices) > 0:
+            batch_size = self.BATCH_SIZE
+            if len(relations_indices) > 0:
                 if len(relations_indices) >= self.BATCH_SIZE:
                     im_batch = np.array([relations_pairs[i][0] for i in relations_indices[-self.BATCH_SIZE:]], dtype=np.float32)
                     triple_batch = np.array([relations_pairs[i][1] for i in relations_indices[-self.BATCH_SIZE:]])
@@ -445,7 +451,8 @@ class SceneGraphWGAN(object):
                         change = np.abs(_disc_cost - old_disc_cost)
                         old_disc_cost = _disc_cost
                         #Some loose measure of convergence
-                        #if _disc_cost < -0.1 and change < 0.001:
+                        """if _disc_cost < -0.1 and change < 0.001:
+                            break"""
                         #if change < 0.00001 or iters_so_far > self.CRITIC_ITERS:
                         if change < 1e-5:
                             break

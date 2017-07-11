@@ -78,7 +78,7 @@ class Generator(object):
         self.g_alpha = tf.get_variable("g/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
         self.g_beta = tf.get_variable("g/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
 
-    def get_initial_lstm(self, initial_context, noise):
+    def get_initial_lstm(self, initial_context):
         #From the paper: "The initial memory state and hidden state of the LSTM are predicted by an average
         #of the annotation vectors fed through two separate MLPs (init,c and init,h)"
         #This is done via the mean_context ops
@@ -116,11 +116,16 @@ class Generator(object):
         #embedded_noise = tf.add(tf.matmul(noise, self.noise_emb_W), self.noise_emb_b)
         #embedded_noise = tf.nn.relu(embedded_noise)
 
-        random_slice = tf.random_uniform([1], minval=0, maxval=195, dtype=tf.int32)
 
         #h, c = self.get_initial_lstm(tf.reduce_mean(context, 1), noise)#(batch_size, dim_hidden + dim_noise)
-        #TODO Decide if you're actually using noise
-        h, c = self.get_initial_lstm(context[:, random_slice[0], :], noise)#(batch_size, dim_hidden)
+
+        #Randomly select an initial feature vector from the image. This will be used to initialize the lstm
+        random_slice = tf.random_uniform([batch_size], minval=0, maxval=self.context_shape[0]-1, dtype=tf.int32)
+        one_hot = tf.one_hot(random_slice, self.context_shape[0], on_value=1.0, off_value=0.0, dtype=tf.float32)
+        one_hot = tf.expand_dims(one_hot, 1)
+        initial_context = tf.matmul(one_hot, context)
+        initial_context = tf.reshape(initial_context, [batch_size, self.context_shape[1]])
+        h, c = self.get_initial_lstm(initial_context)#(batch_size, dim_hidden)
 
         l = []
 
