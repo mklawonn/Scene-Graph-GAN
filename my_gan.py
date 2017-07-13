@@ -18,7 +18,7 @@ from PIL import ImageDraw
 
 
 class SceneGraphWGAN(object):
-    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64, CRITIC_ITERS=10):
+    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10):
         self.batch_path = batch_path
         self.batch_path += "/" if self.batch_path[-1] != "/" else ""
         self.path_to_vocab_json = path_to_vocab_json
@@ -69,7 +69,7 @@ class SceneGraphWGAN(object):
 
         #Hyperparameters
         self.BATCH_SIZE = BATCH_SIZE
-        self.LAMBDA = 10
+        self.LAMBDA = LAMBDA
         self.CRITIC_ITERS = CRITIC_ITERS
         self.DIM = 512
         self.ITERS = 100000
@@ -77,15 +77,19 @@ class SceneGraphWGAN(object):
 
 
         #Import the correct discriminator according to the keyword argument
-        if discriminator == "mlp":
-            from architectures.mlp_discriminator import Discriminator
+        if discriminator == "language_only":
+            from architectures.language_only_discriminator import Discriminator
+        elif discriminator == "conv_lang":
+            from architectures.cnn_language_discriminator import Discriminator
         elif discriminator == "conv1D":
             from architectures.conv1D_discriminator import Discriminator
         else:
             from architectures.discriminator_with_attention import Discriminator
 
-        if generator == "mlp":
-            from architecutres.mlp_generator import Generator
+        if generator == "language_only":
+            from architectures.language_only_generator import Generator
+        elif discriminator == "conv_lang":
+            from architectures.cnn_language_generator import Generator
         elif generator == "conv1D":
             from architectures.conv1D_generator import Generator
         else:
@@ -391,6 +395,14 @@ class SceneGraphWGAN(object):
         return gen_total, disc_total
 
             
+    def discTrainBody(self, old_cost, difference, threshold, train):
+        disc_cost = self.disc_cost
+        difference = tf.abs(tf.subtract(old_cost, disc_cost))
+        old_cost = disc_cost
+        return old_cost, difference, threshold, self.disc_train_op
+
+    def discTrainConvergence(self, old_cost, difference, threshold, train):
+        return tf.less(difference, threshold)
 
     def Train(self, epochs, print_interval):
         self.saver = tf.train.Saver()
@@ -434,15 +446,18 @@ class SceneGraphWGAN(object):
                         #Track training statistics every ten iterations
                         _ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.real_inputs : triple_batch,\
                                             self.batch_size_placeholder : batch_size, self.attribute_or_relation : attributes_relations_flag, self.gumbel_temp : gumbel_temp})
-                        #_ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.batch_size_placeholder : batch_size}, options=run_options, run_metadata=run_metadata)
-                        #writer.add_run_metadata(run_metadata, "Iteration %d generator" % iteration)
-                        #_ = session.run(self.gen_train_op, feed_dict={self.image_feats:im_batch, self.noise:noise}, options=run_options, run_metadata=run_metadata)
 
-                    #Start out low so that the discriminator at least has to do pretty well
-                    old_disc_cost = -0.1
-                    #iters_so_far = 0
+                    """old_cost = tf.constant(-0.1)
+                    difference = tf.constant(0.0)
+                    threshold = tf.constant(1e-5)
+                    train = self.disc_train_op
+                    feed_dict = {self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder:batch_size,\
+                                 self.attribute_or_relation:attributes_relations_flag, self.gumbel_temp:gumbel_temp}
+                    _disc_cost, _, _, _ = tf.while_loop(self.discTrainConvergence, self.discTrainBody, [old_cost, difference, threshold, train])
+                    session.run([_disc_cost, train], feed_dict=feed_dict)"""
+
+                    old_disc_cost = 0.1
                     while True:
-                        #im_batch, triple_batch = gen.next()
                         _disc_cost, _ = session.run(
                             [self.disc_cost, self.disc_train_op],
                             feed_dict={self.real_inputs:triple_batch, self.image_feats:im_batch, self.batch_size_placeholder : batch_size,\
@@ -451,12 +466,12 @@ class SceneGraphWGAN(object):
                         change = np.abs(_disc_cost - old_disc_cost)
                         old_disc_cost = _disc_cost
                         #Some loose measure of convergence
-                        """if _disc_cost < -0.1 and change < 0.001:
-                            break"""
+                        #if _disc_cost < -0.1 and change < 0.001:
+                        #    break
                         #if change < 0.00001 or iters_so_far > self.CRITIC_ITERS:
-                        if change < 1e-5:
+                        if change < 1e-4 and _disc_cost < 0:
                             break
-                        #iters_so_far += 1
+                        #iters_so_far += 1"""
 
                     if iteration % loss_print_interval == 0:
                         stop_time = time.time()
@@ -513,6 +528,7 @@ if __name__ == "__main__":
     parser.add_argument("--resume", default=False, help="Resume training from the last checkpoint for this configuration", type=bool)
     parser.add_argument("--print_interval", default=500, help="The model will be saved and samples will be generated every <print_interval> iterations", type=int)
     parser.add_argument("--tf_verbosity", default="ERROR", help="Sets tensorflow verbosity. Specifies which warning level to suppress. Defaults to ERROR")
+    parser.add_argument("--lambda", default=10, help="Lambda term which regularizes to be close to one lipschitz", type=int)
 
     args = parser.parse_args()
     params = vars(args)
@@ -523,5 +539,5 @@ if __name__ == "__main__":
 
     #Begin training
     wgan = SceneGraphWGAN(batch_path, path_to_vocab_json, params["generator"], params["discriminator"], logs_dir, samples_dir, 
-           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"])
+           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"])
     wgan.Train(params["epochs"], params["print_interval"])
