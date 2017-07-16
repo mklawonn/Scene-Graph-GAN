@@ -54,7 +54,7 @@ class Generator(object):
 
         self.output_conv = tf.get_variable("output_conv", [1,dim_hidden,vocab_size], initializer=he_initializer)
 
-    def build_generator(self, context, batch_size, gumbel_temp):
+    def build_generator(self, context, batch_size):
         noise = tf.random_uniform([batch_size, self.noise_dim])
 
         flattened_context = tf.reshape(context, [-1, self.dim_context[0]*self.dim_context[1]])
@@ -73,8 +73,7 @@ class Generator(object):
         #e = tf.add(tf.matmul(context_and_noise, self.att_W), self.att_b)
         e = tf.add(tf.matmul(embedded_context, self.att_W), self.att_b)
 
-        #alpha = tf.nn.softmax(e)
-        alpha = tf.contrib.distributions.RelaxedOneHotCategorical(1.25, logits=e).sample()
+        alpha = tf.nn.softmax(e)
         z_hat = tf.reduce_sum(tf.multiply(context, tf.expand_dims(alpha, 2)), axis = 1) #Output is [batch_size, dim_context[1]]
 
         #In order to generate a sequence from this z_hat, 

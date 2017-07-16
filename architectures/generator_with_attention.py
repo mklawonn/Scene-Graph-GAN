@@ -101,9 +101,9 @@ class Generator(object):
         normalized = scale * (inputs - mean) / tf.sqrt(var + epsilon) + shift
         return normalized
 
-    def build_generator(self, context, batch_size, attributes_flag, soft_gumbel_temp):
-        flag = tf.reshape(attributes_flag, [1, 1])
-        flag = tf.tile(flag, [batch_size, self.flag_shape])
+    def build_generator(self, context, batch_size, attributes_flag):
+        flag = tf.reshape(attributes_flag, [batch_size, 1])
+        flag = tf.tile(flag, [1, self.flag_shape])
         #embedded_flag = tf.add(tf.matmul(flag, self.flag_encode_W), self.flag_encode_b)
 
         flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])

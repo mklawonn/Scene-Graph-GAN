@@ -110,8 +110,8 @@ class Discriminator(object):
         first_word = input_triples[:, 0, :]
         h, c = self.get_initial_lstm(tf.reduce_mean(context, 1), first_word)#(batch_size, dim_hidden)
 
-        flag = tf.reshape(attributes_flag, [1, 1])
-        flag = tf.tile(flag, [batch_size, self.flag_shape])
+        flag = tf.reshape(attributes_flag, [batch_size, 1])
+        flag = tf.tile(flag, [1, self.flag_shape])
         #embedded_flag = tf.add(tf.matmul(flag, self.flag_encode_W), self.flag_encode_b)
 
         flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])

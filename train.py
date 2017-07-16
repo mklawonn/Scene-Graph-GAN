@@ -14,7 +14,7 @@ from tqdm import tqdm
 from subprocess import call
 
 class SceneGraphWGAN(object):
-    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10):
+    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, num_epochs=1):
         self.batch_path = batch_path
         self.batch_path += "/" if self.batch_path[-1] != "/" else ""
         self.path_to_vocab_json = path_to_vocab_json
@@ -24,6 +24,8 @@ class SceneGraphWGAN(object):
         self.checkpoints_dir = os.path.join(self.logs_dir, "checkpoints/")
         self.summaries_dir = os.path.join(self.logs_dir, "summaries/")
         self.samples_dir = os.path.join(samples_dir, self.configuration)
+        self.num_epochs = num_epochs
+        self.queue_capacity = 10000
 
         #For use with the data generator
         self.attributes_flag = 0.0
@@ -69,7 +71,7 @@ class SceneGraphWGAN(object):
         self.CRITIC_ITERS = CRITIC_ITERS
         self.DIM = 512
         self.ITERS = 100000
-        self.INITIAL_GUMBEL_TEMP = 2.0
+        self.convergence_threshold = 1e-5
 
 
         #Import the correct discriminator according to the keyword argument
@@ -98,6 +100,18 @@ class SceneGraphWGAN(object):
         with tf.variable_scope("Discriminator") as scope:
             self.d = Discriminator(self.vocab_size, batch_size = self.BATCH_SIZE)
 
+    def Generator(self, image_feats, batch_size, attribute_or_relation, prev_outputs=None):
+        print "Building Generator"
+        with tf.variable_scope("Generator", reuse=True) as scope:
+            generated_words = self.g.build_generator(image_feats, batch_size, attribute_or_relation)
+            return generated_words
+
+    def Discriminator(self, triple_input, image_feats, batch_size, attribute_or_relation):
+        print "Building Discriminator"
+        with tf.variable_scope("Discriminator", reuse=True) as scope:
+            logits = self.d.build_discriminator(image_feats, triple_input, batch_size, attribute_or_relation)
+            return logits
+
 
     def generateBigArr(self):
         train_path = os.path.join(self.batch_path, "train")
@@ -123,30 +137,37 @@ class SceneGraphWGAN(object):
             trips = self.oneHot(big_arr[i+1])
             im_feats = np.tile(np.expand_dims(big_arr[i], axis=0), (trips.shape[0], 1, 1))
             flag = np.tile(self.attributes_flag, trips.shape[0])
-            yield im_feats, trips, flag
+            for i in range(trips.shape[0]):
+                yield im_feats[i], trips[i], flag[i]
             #Yield one_hot encoded relations
             trips = self.oneHot(big_arr[i+2])
             flag = np.tile(self.relations_flag, trips.shape[0])
-            yield im_feats, trips, flag
+            for i in range(trips.shape[0]):
+                yield im_feats[i], trips[i], flag[i]
 
     def constructOps(self):
-        self.im_feats_placeholder = tf.placeholder(tf.float32, shape=[None, self.image_feat_dim])
-        self.triples_placeholder = tf.placeholder(tf.float32, shape=[None, self.seq_len, self.vocab_size])
-        self.flag_placeholder = tf.placeholder(tf.float32, shape=[None])
 
-        self.queue = tf.RandomShuffleQueue(capacity=self.queue_capacity, dtypes=[tf.float32, tf.float32, tf.float32], shapes=[self.image_feat_dim, [self.seq_len, self.vocab_size], []])
-        self.enqueue_op = self.queue.enqueue_many([self.im_feats_placeholder, self.triples_placeholder, self.flag_placeholder])
-        self.dequeue_op = self.queue.dequeue()
+        #Pin data ops to the cpu
+        with tf.device("/cpu:0"):
+            self.im_feats_placeholder = tf.placeholder(tf.float32, shape=[self.image_feat_dim[0], self.image_feat_dim[1]])
+            self.triples_placeholder = tf.placeholder(tf.float32, shape=[self.seq_len, self.vocab_size])
+            self.flag_placeholder = tf.placeholder(tf.float32, shape=[])
+
+            min_after_dequeue = 0
+            shapes = [[self.image_feat_dim[0], self.image_feat_dim[1]], [self.seq_len, self.vocab_size], []]
+            self.queue = tf.RandomShuffleQueue(self.queue_capacity, min_after_dequeue, dtypes=[tf.float32, tf.float32, tf.float32], shapes=shapes)
+            self.queue_size_op = self.queue.size()
+            self.enqueue_op = self.queue.enqueue([self.im_feats_placeholder, self.triples_placeholder, self.flag_placeholder])
 
         self.disc_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
         self.gen_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
 
-        self.train_while_loop = tf.while_loop(self.mainTrain, self.mainTrainCond, [tf.constant(0.0)])
+        self.train_while_loop = tf.while_loop(self.mainTrainCond, self.mainTrain, [tf.constant(0.0), tf.constant(0.0)])
 
     def enqueue(self, sess):
         #Enqueue data num_epochs times
         for i in range(self.num_epochs):
-            #TODO Multithread support?
+            #TODO Support multiple enqueue threads?
             generator = self.dataGenerator()
             for im_batch, triples_batch, flag_batch in generator:
                 feed_dict = {self.im_feats_placeholder : im_batch,\
@@ -155,41 +176,43 @@ class SceneGraphWGAN(object):
                 sess.run(self.enqueue_op, feed_dict = feed_dict)
     
     #while(condition(tensors)) { tensors = body(tensors); }
-    def mainTrain(self, dummy_var):
+    def mainTrain(self, gen_cost, disc_cost):
         #Define enqueue and dequeue ops
         old_disc_cost = tf.constant(-0.1)
         diff = tf.constant(10*self.convergence_threshold)
 
-        ims, triples, flags = tf.train.batch(dequeue_op, batch_size=BATCH_SIZE, capacity=500, allow_smaller_final_batch=False)
+        #ims, triples, flags = tf.train.batch(self.dequeue_op, batch_size=self.BATCH_SIZE, capacity=500, allow_smaller_final_batch=False, name="TheBatchOp")
+        with tf.device("/cpu:0"):
+            ims, triples, flags = self.queue.dequeue_many(self.BATCH_SIZE, name="TheBatchOp")
 
-        fake_inputs = self.Generator(self.image_feats, self.BATCH_SIZE, self.attribute_or_relation, self.gumbel_temp)
+        fake_inputs = self.Generator(ims, self.BATCH_SIZE, flags)
 
         disc_real = self.Discriminator(triples, ims, self.BATCH_SIZE, flags)
         disc_fake = self.Discriminator(fake_inputs, ims, self.BATCH_SIZE, flags)
 
-        def trainDiscToConvergence(self, old_disc_cost, diff):
-            disc_cost = tf.reduce_mean(self.disc_fake, axis=1) - tf.reduce_mean(self.disc_real, axis=1)
+        def trainDiscToConvergence(old_disc_cost, diff):
+            disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
             disc_cost = tf.reduce_mean(disc_cost)
 
             # WGAN lipschitz-penalty
             alpha = tf.random_uniform(
-                shape=[self.batch_size_placeholder,1,1], 
+                shape=[self.BATCH_SIZE,1,1], 
                 minval=0.,
                 maxval=1.
             )
-            differences = fake_inputs - self.real_inputs
-            interpolates = self.real_inputs + (alpha*differences)
-            gradients = tf.gradients(self.Discriminator(interpolates, self.image_feats, self.batch_size_placeholder, self.attribute_or_relation), [interpolates])[0]
+            differences = fake_inputs - triples
+            interpolates = triples + (alpha*differences)
+            gradients = tf.gradients(self.Discriminator(interpolates, ims, self.BATCH_SIZE, flags), [interpolates])[0]
             slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
             gradient_penalty = tf.reduce_mean((slopes-1.)**2)
             disc_cost += self.LAMBDA*gradient_penalty
 
             disc_train_op = self.disc_optimizer.minimize(disc_cost)
-            diff = tf.abs(tf.sub(disc_cost, old_disc_cost))
+            diff = tf.abs(tf.subtract(disc_cost, old_disc_cost))
             with tf.control_dependencies([disc_train_op]):
                 return disc_cost, diff
 
-        def discConvergence(self, old_disc_cost, diff):
+        def discConvergence(old_disc_cost, diff):
             return tf.less(diff, self.convergence_threshold)
 
         disc_while_loop = tf.while_loop(discConvergence, trainDiscToConvergence, [old_disc_cost, diff])
@@ -199,10 +222,10 @@ class SceneGraphWGAN(object):
         gen_cost = tf.reduce_mean(gen_cost)
         gen_train_op = self.gen_optimizer.minimize(gen_cost)
 
-        with tf.control_dependencies([disc_while_loop, gen_train_op]):
-            return dummy_var
+        with tf.control_dependencies([disc_while_loop[0], gen_train_op]):
+            return gen_cost, disc_while_loop[0]
 
-    def mainTrainCond(self, dummy_var):
+    def mainTrainCond(self, gen_cost, disc_cost):
         return False
 
     def Train(self):
@@ -218,26 +241,26 @@ class SceneGraphWGAN(object):
                 while True:
                     if coord.should_stop():
                         break
-                    sess.run(self.train_while_loop)
+                    out = sess.run(self.train_while_loop)
+                    print sess.run(self.queue_size_op)
             except Exception, e:
+                print Exception
                 coord.request_stop(e)
             finally:
                 coord.request_stop()
                 coord.join(threads)
+            print "Done"
             #TODO: Save model
 
 
 if __name__ == "__main__":
-    #"Permanent" arguments from the config file
-    arg_dict = parseConfigFile()
-    batch_path = os.path.join(arg_dict["visual_genome"], "batches")
-    path_to_vocab_json = arg_dict["vocab"]
-    logs_dir = arg_dict["logs"]
-    samples_dir = arg_dict["samples"]
-
-
     #Argparse args
     parser = argparse.ArgumentParser()
+
+    parser.add_argument("--visual_genome", default="./data/", help="The path to the visual genome data. Defaults to ./data")
+    parser.add_argument("--logs_dir", default="./logs/", help="The path to the logs where files will be saved and TensorBoard summaries are written.")
+    parser.add_argument("--samples_dir", default="./samples/", help="The path to the samples dir where samples will be generated.")
+    parser.add_argument("--vocab", default="./preprocessing/vocab.json", help="Path to the vocabulary")
 
     parser.add_argument("--batch_size", default=64, help="Batch size defaults to 64", type=int)
     parser.add_argument("--critic_iters", default=10, help="Number of iterations to train the critic", type=int)
@@ -252,12 +275,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
     params = vars(args)
 
+    batch_path = os.path.join(params["visual_genome"], "batches")
+
     verbosity_dict = {"DEBUG" : 0, "INFO" : 1, "WARN" : 2, "ERROR" : 3}
 
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '{}'.format(verbosity_dict[params["tf_verbosity"]])
 
     #Begin training
-    wgan = SceneGraphWGAN(batch_path, path_to_vocab_json, params["generator"], params["discriminator"], logs_dir, samples_dir, 
+    wgan = SceneGraphWGAN(batch_path, params["vocab"], params["generator"], params["discriminator"], params["logs_dir"], params["samples_dir"], 
            BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"])
     #wgan.Train(params["epochs"], params["print_interval"])
     wgan.Train()

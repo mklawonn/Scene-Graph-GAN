@@ -39,7 +39,7 @@ class Generator(object):
 
         self.output_conv = tf.get_variable("output_conv", [1,dim_hidden,vocab_size], initializer=he_initializer)
 
-    def build_generator(self, context, batch_size, attributes_flag, gumbel):
+    def build_generator(self, context, batch_size, attributes_flag):
         noise = tf.random_uniform([batch_size, self.noise_dim])
 
         embedded_noise = tf.add(tf.matmul(noise, self.noise_embed_W), self.noise_embed_b)

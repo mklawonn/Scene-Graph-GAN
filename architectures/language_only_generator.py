@@ -78,7 +78,7 @@ class Generator(object):
         normalized = scale * (inputs - mean) / tf.sqrt(var + epsilon) + shift
         return normalized
 
-    def build_generator(self, context, batch_size, attributes_flag, soft_gumbel_temp):
+    def build_generator(self, context, batch_size, attributes_flag):
         flag = tf.reshape(attributes_flag, [1, 1])
         flag = tf.tile(flag, [batch_size, self.flag_shape])
 
