@@ -12,9 +12,10 @@ import numpy as np
 
 from tqdm import tqdm
 from subprocess import call
+from custom_runner import CustomRunner
 
 class SceneGraphWGAN(object):
-    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, num_epochs=1):
+    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, num_epochs=0):
         self.batch_path = batch_path
         self.batch_path += "/" if self.batch_path[-1] != "/" else ""
         self.path_to_vocab_json = path_to_vocab_json
@@ -25,7 +26,7 @@ class SceneGraphWGAN(object):
         self.summaries_dir = os.path.join(self.logs_dir, "summaries/")
         self.samples_dir = os.path.join(samples_dir, self.configuration)
         self.num_epochs = num_epochs
-        self.queue_capacity = 10000
+        self.queue_capacity = 100
 
         #For use with the data generator
         self.attributes_flag = 0.0
@@ -113,144 +114,81 @@ class SceneGraphWGAN(object):
             return logits
 
 
-    def generateBigArr(self):
-        train_path = os.path.join(self.batch_path, "train")
-        filenames = [os.path.join(train_path, i) for i in os.listdir(train_path)]
-        big_arr_1 = np.load(filenames[0])['arr_0']
-        big_arr_list = []
-        for f in range(1, len(filenames)):
-            npz = np.load(filenames[f])
-            big_arr_list.append(npz['arr_0'])
-        return np.append(big_arr_1, big_arr_list)
-
-    def oneHot(self, trips):
-        one_hot = np.zeros((trips.shape[0], self.seq_len, self.vocab_size), dtype=np.float32)
-        for i in range(trips.shape[0]):
-            for j in range(self.seq_len):
-                one_hot[i, j, trips[i, j]] = 1.0
-        return one_hot
-
-    def dataGenerator(self):
-        big_arr = self.generateBigArr()
-        for i in range(0, big_arr.shape[0], 3):
-            #Yield one_hot encoded attributes
-            trips = self.oneHot(big_arr[i+1])
-            im_feats = np.tile(np.expand_dims(big_arr[i], axis=0), (trips.shape[0], 1, 1))
-            flag = np.tile(self.attributes_flag, trips.shape[0])
-            for i in range(trips.shape[0]):
-                yield im_feats[i], trips[i], flag[i]
-            #Yield one_hot encoded relations
-            trips = self.oneHot(big_arr[i+2])
-            flag = np.tile(self.relations_flag, trips.shape[0])
-            for i in range(trips.shape[0]):
-                yield im_feats[i], trips[i], flag[i]
-
     def constructOps(self):
-
         #Pin data ops to the cpu
         with tf.device("/cpu:0"):
-            self.im_feats_placeholder = tf.placeholder(tf.float32, shape=[self.image_feat_dim[0], self.image_feat_dim[1]])
-            self.triples_placeholder = tf.placeholder(tf.float32, shape=[self.seq_len, self.vocab_size])
-            self.flag_placeholder = tf.placeholder(tf.float32, shape=[])
-
-            min_after_dequeue = 0
-            shapes = [[self.image_feat_dim[0], self.image_feat_dim[1]], [self.seq_len, self.vocab_size], []]
-            self.queue = tf.RandomShuffleQueue(self.queue_capacity, min_after_dequeue, dtypes=[tf.float32, tf.float32, tf.float32], shapes=shapes)
-            self.queue_size_op = self.queue.size()
-            self.enqueue_op = self.queue.enqueue([self.im_feats_placeholder, self.triples_placeholder, self.flag_placeholder])
-
+            self.custom_runner = CustomRunner(self.image_feat_dim, self.vocab_size, self.seq_len, self.BATCH_SIZE, self.num_epochs)
+            ims, triples, flags = self.custom_runner.get_inputs()
+        
         self.disc_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
         self.gen_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
 
-        self.train_while_loop = tf.while_loop(self.mainTrainCond, self.mainTrain, [tf.constant(0.0), tf.constant(0.0)])
+        self.fake_inputs = self.Generator(ims, self.BATCH_SIZE, flags)
 
-    def enqueue(self, sess):
-        #Enqueue data num_epochs times
-        for i in range(self.num_epochs):
-            #TODO Support multiple enqueue threads?
-            generator = self.dataGenerator()
-            for im_batch, triples_batch, flag_batch in generator:
-                feed_dict = {self.im_feats_placeholder : im_batch,\
-                             self.triples_placeholder : triples_batch,\
-                             self.flag_placeholder : flag_batch}
-                sess.run(self.enqueue_op, feed_dict = feed_dict)
-    
-    #while(condition(tensors)) { tensors = body(tensors); }
-    def mainTrain(self, gen_cost, disc_cost):
-        #Define enqueue and dequeue ops
-        old_disc_cost = tf.constant(-0.1)
-        diff = tf.constant(10*self.convergence_threshold)
+        #TODO: Figure out why it's hanging
+        """disc_real = self.Discriminator(triples, ims, self.BATCH_SIZE, flags)
+        disc_fake = self.Discriminator(self.fake_inputs, ims, self.BATCH_SIZE, flags)
 
-        #ims, triples, flags = tf.train.batch(self.dequeue_op, batch_size=self.BATCH_SIZE, capacity=500, allow_smaller_final_batch=False, name="TheBatchOp")
-        with tf.device("/cpu:0"):
-            ims, triples, flags = self.queue.dequeue_many(self.BATCH_SIZE, name="TheBatchOp")
+        train_variables = tf.trainable_variables()
+        gen_params = [v for v in train_variables if v.name.startswith("Generator")]
+        disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
+        assert len(gen_params) > 0
+        assert len(disc_params) > 0
 
-        fake_inputs = self.Generator(ims, self.BATCH_SIZE, flags)
+        disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
+        disc_cost = tf.reduce_mean(disc_cost)
 
-        disc_real = self.Discriminator(triples, ims, self.BATCH_SIZE, flags)
-        disc_fake = self.Discriminator(fake_inputs, ims, self.BATCH_SIZE, flags)
+        # WGAN lipschitz-penalty
+        alpha = tf.random_uniform(
+            shape=[self.BATCH_SIZE,1,1], 
+            minval=0.,
+            maxval=1.
+        )
+        differences = self.fake_inputs - triples
+        interpolates = triples + (alpha*differences)
+        gradients = tf.gradients(self.Discriminator(interpolates, ims, self.BATCH_SIZE, flags), [interpolates])[0]
+        slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
+        gradient_penalty = tf.reduce_mean((slopes-1.)**2)
+        disc_cost += self.LAMBDA*gradient_penalty
 
-        def trainDiscToConvergence(old_disc_cost, diff):
-            disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
-            disc_cost = tf.reduce_mean(disc_cost)
+        self.disc_train_op = self.disc_optimizer.minimize(disc_cost, var_list=disc_params)
 
-            # WGAN lipschitz-penalty
-            alpha = tf.random_uniform(
-                shape=[self.BATCH_SIZE,1,1], 
-                minval=0.,
-                maxval=1.
-            )
-            differences = fake_inputs - triples
-            interpolates = triples + (alpha*differences)
-            gradients = tf.gradients(self.Discriminator(interpolates, ims, self.BATCH_SIZE, flags), [interpolates])[0]
-            slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
-            gradient_penalty = tf.reduce_mean((slopes-1.)**2)
-            disc_cost += self.LAMBDA*gradient_penalty
-
-            disc_train_op = self.disc_optimizer.minimize(disc_cost)
-            diff = tf.abs(tf.subtract(disc_cost, old_disc_cost))
-            with tf.control_dependencies([disc_train_op]):
-                return disc_cost, diff
-
-        def discConvergence(old_disc_cost, diff):
-            return tf.less(diff, self.convergence_threshold)
-
-        disc_while_loop = tf.while_loop(discConvergence, trainDiscToConvergence, [old_disc_cost, diff])
-
-        # Compute the loss and gradient update based on the current example.
         gen_cost = -tf.reduce_mean(disc_fake, axis=1)
         gen_cost = tf.reduce_mean(gen_cost)
-        gen_train_op = self.gen_optimizer.minimize(gen_cost)
+        self.gen_train_op = self.gen_optimizer.minimize(gen_cost, var_list=gen_params)
 
-        with tf.control_dependencies([disc_while_loop[0], gen_train_op]):
-            return gen_cost, disc_while_loop[0]
+        tf.summary.scalar("Discriminator Cost", disc_cost)
+        tf.summary.scalar("Generator Cost", gen_cost)"""
 
-    def mainTrainCond(self, gen_cost, disc_cost):
-        return False
-
+    
     def Train(self):
         self.constructOps()
-        with tf.Session() as sess:
+        summary_op = tf.summary.merge_all()
+        with tf.Session(config=tf.ConfigProto(intra_op_parallelism_threads=8)) as sess:
             sess.run(tf.global_variables_initializer())
-            enqueue_thread = threading.Thread(target=self.enqueue, args=[sess])
-            enqueue_thread.daemon = True
-            enqueue_thread.start()
-            coord = tf.train.Coordinator()
-            threads = tf.train.start_queue_runners(coord=coord, sess=sess)
+            tf.train.start_queue_runners(sess=sess)
+            self.custom_runner.start_threads(sess)
             try:
+                itr = 0
+                print "Training WGAN for {} epochs. To monitor training via TensorBoard, run python -m tensorflow.tensorboard --logdir {}"\
+                .format(self.num_epochs, self.summaries_dir)
                 while True:
-                    if coord.should_stop():
-                        break
-                    out = sess.run(self.train_while_loop)
-                    print sess.run(self.queue_size_op)
+                    sess.run(self.fake_inputs)
+                    print "1"
+                    sess.run(self.disc_train_op)
+                    print "2"
+                    sess.run(self.gen_train_op)
+                    summary = sess.run(summary_op)
+                    assert sess.run(queue_size_op) == 0
+                    writer.add_summary(summary, itr)
+                    writer.flush()
+                    itr+=1
+                    print "Hello Darkness my old friend"
             except Exception, e:
-                print Exception
-                coord.request_stop(e)
+                print e
             finally:
-                coord.request_stop()
-                coord.join(threads)
-            print "Done"
-            #TODO: Save model
+                print "Done"
+                #TODO: Save model
 
 
 if __name__ == "__main__":
