@@ -15,7 +15,7 @@ from subprocess import call
 from custom_runner import CustomRunner
 
 class SceneGraphWGAN(object):
-    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, num_epochs=0):
+    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, max_iterations=50000):
         self.batch_path = batch_path
         self.batch_path += "/" if self.batch_path[-1] != "/" else ""
         self.path_to_vocab_json = path_to_vocab_json
@@ -25,12 +25,9 @@ class SceneGraphWGAN(object):
         self.checkpoints_dir = os.path.join(self.logs_dir, "checkpoints/")
         self.summaries_dir = os.path.join(self.logs_dir, "summaries/")
         self.samples_dir = os.path.join(samples_dir, self.configuration)
-        self.num_epochs = num_epochs
-        self.queue_capacity = 100
-
-        #For use with the data generator
-        self.attributes_flag = 0.0
-        self.relations_flag = 1.0
+        #self.num_epochs = num_epochs
+        self.max_iterations = max_iterations
+        self.queue_capacity = 5000
 
         if not os.path.exists(self.checkpoints_dir):
             os.makedirs(self.checkpoints_dir)
@@ -117,7 +114,7 @@ class SceneGraphWGAN(object):
     def constructOps(self):
         #Pin data ops to the cpu
         with tf.device("/cpu:0"):
-            self.custom_runner = CustomRunner(self.image_feat_dim, self.vocab_size, self.seq_len, self.BATCH_SIZE, self.num_epochs)
+            self.custom_runner = CustomRunner(self.image_feat_dim, self.vocab_size, self.seq_len, self.BATCH_SIZE, self.batch_path)
             ims, triples, flags = self.custom_runner.get_inputs()
         
         self.disc_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
@@ -125,8 +122,7 @@ class SceneGraphWGAN(object):
 
         self.fake_inputs = self.Generator(ims, self.BATCH_SIZE, flags)
 
-        #TODO: Figure out why it's hanging
-        """disc_real = self.Discriminator(triples, ims, self.BATCH_SIZE, flags)
+        disc_real = self.Discriminator(triples, ims, self.BATCH_SIZE, flags)
         disc_fake = self.Discriminator(self.fake_inputs, ims, self.BATCH_SIZE, flags)
 
         train_variables = tf.trainable_variables()
@@ -158,32 +154,28 @@ class SceneGraphWGAN(object):
         self.gen_train_op = self.gen_optimizer.minimize(gen_cost, var_list=gen_params)
 
         tf.summary.scalar("Discriminator Cost", disc_cost)
-        tf.summary.scalar("Generator Cost", gen_cost)"""
+        tf.summary.scalar("Generator Cost", gen_cost)
 
     
     def Train(self):
         self.constructOps()
         summary_op = tf.summary.merge_all()
         with tf.Session(config=tf.ConfigProto(intra_op_parallelism_threads=8)) as sess:
+            writer = tf.summary.FileWriter(self.summaries_dir, sess.graph)
             sess.run(tf.global_variables_initializer())
             tf.train.start_queue_runners(sess=sess)
             self.custom_runner.start_threads(sess)
             try:
-                itr = 0
-                print "Training WGAN for {} epochs. To monitor training via TensorBoard, run python -m tensorflow.tensorboard --logdir {}"\
-                .format(self.num_epochs, self.summaries_dir)
-                while True:
-                    sess.run(self.fake_inputs)
-                    print "1"
+                print "Training WGAN for {} iterations. To monitor training via TensorBoard, run python -m tensorflow.tensorboard --logdir {}"\
+                .format(self.max_iterations, self.summaries_dir)
+                for itr in tqdm(range(self.max_iterations)):
                     sess.run(self.disc_train_op)
-                    print "2"
                     sess.run(self.gen_train_op)
-                    summary = sess.run(summary_op)
-                    assert sess.run(queue_size_op) == 0
-                    writer.add_summary(summary, itr)
-                    writer.flush()
-                    itr+=1
-                    print "Hello Darkness my old friend"
+                    if itr % 50 == 0:
+                        summary = sess.run(summary_op)
+                        writer.add_summary(summary, itr)
+                        writer.flush()
+                        #print itr
             except Exception, e:
                 print e
             finally:
@@ -200,7 +192,7 @@ if __name__ == "__main__":
     parser.add_argument("--samples_dir", default="./samples/", help="The path to the samples dir where samples will be generated.")
     parser.add_argument("--vocab", default="./preprocessing/vocab.json", help="Path to the vocabulary")
 
-    parser.add_argument("--batch_size", default=64, help="Batch size defaults to 64", type=int)
+    parser.add_argument("--batch_size", default=256, help="Batch size defaults to 64", type=int)
     parser.add_argument("--critic_iters", default=10, help="Number of iterations to train the critic", type=int)
     parser.add_argument("--generator", default="lstm", help="Generator defaults to LSTM with attention. See the architectures folder.")
     parser.add_argument("--discriminator", default="lstm", help="Discriminator defaults to LSTM with attention. See the architectures folder.")

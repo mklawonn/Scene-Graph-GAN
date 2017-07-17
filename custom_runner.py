@@ -2,6 +2,7 @@ import os, sys
 sys.path.append(os.getcwd())
 
 import tensorflow as tf
+import numpy as np
 
 import threading
 
@@ -10,12 +11,17 @@ class CustomRunner(object):
     This class manages the the background threads needed to fill
         a queue full of data.
     """
-    def __init__(self, image_feat_dim, vocab_size, seq_len, batch_size, num_epochs):
+    def __init__(self, image_feat_dim, vocab_size, seq_len, batch_size, batch_path):
 
+        self.image_feat_dim = image_feat_dim
+        self.vocab_size = vocab_size
+        self.seq_len = seq_len
         self.batch_size = batch_size
-        queue_capacity = batch_size*4
-        self.num_epochs = num_epochs
+        self.batch_path = batch_path
+        queue_capacity = batch_size*10
 
+        self.attributes_flag = 0.0
+        self.relations_flag = 1.0
 
         self.im_feats_placeholder = tf.placeholder(tf.float32, shape=[image_feat_dim[0], image_feat_dim[1]])
         self.triples_placeholder = tf.placeholder(tf.float32, shape=[seq_len, vocab_size])
@@ -30,12 +36,11 @@ class CustomRunner(object):
     def generateBigArr(self):
         train_path = os.path.join(self.batch_path, "train")
         filenames = [os.path.join(train_path, i) for i in os.listdir(train_path)]
-        big_arr_1 = np.load(filenames[0])['arr_0']
         big_arr_list = []
-        for f in range(1, len(filenames)):
+        for f in range(len(filenames)):
             npz = np.load(filenames[f])
             big_arr_list.append(npz['arr_0'])
-        return np.append(big_arr_1, big_arr_list)
+        return np.concatenate(big_arr_list, axis=0)
 
     def oneHot(self, trips):
         one_hot = np.zeros((trips.shape[0], self.seq_len, self.vocab_size), dtype=np.float32)
@@ -47,17 +52,19 @@ class CustomRunner(object):
     def dataGenerator(self):
         big_arr = self.generateBigArr()
         for i in range(0, big_arr.shape[0], 3):
+            atts = big_arr[i+1]
+            rels = big_arr[i+2]
             #Yield one_hot encoded attributes
-            trips = self.oneHot(big_arr[i+1])
-            im_feats = np.tile(np.expand_dims(big_arr[i], axis=0), (trips.shape[0], 1, 1))
+            trips = self.oneHot(atts)
+            im_feats = np.tile(np.expand_dims(big_arr[i], axis=0), (max(atts.shape[0], rels.shape[0]), 1, 1))
             flag = np.tile(self.attributes_flag, trips.shape[0])
-            for i in range(trips.shape[0]):
-                yield im_feats[i], trips[i], flag[i]
+            for j in range(trips.shape[0]):
+                yield im_feats[j], trips[j], flag[j]
             #Yield one_hot encoded relations
-            trips = self.oneHot(big_arr[i+2])
+            trips = self.oneHot(rels)
             flag = np.tile(self.relations_flag, trips.shape[0])
-            for i in range(trips.shape[0]):
-                yield im_feats[i], trips[i], flag[i]
+            for j in range(trips.shape[0]):
+                yield im_feats[j], trips[j], flag[j]
 
 
     def get_inputs(self):
@@ -71,7 +78,8 @@ class CustomRunner(object):
         """
         Function run on alternate thread. Basically, keep adding data to the queue.
         """
-        for i in range(self.num_epochs):
+        #for i in range(self.num_epochs):
+        while True:
             #TODO Support multiple enqueue threads?
             generator = self.dataGenerator()
             for im_batch, triples_batch, flag_batch in generator:
