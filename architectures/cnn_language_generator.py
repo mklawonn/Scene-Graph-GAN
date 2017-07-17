@@ -44,8 +44,8 @@ class Generator(object):
 
         embedded_noise = tf.add(tf.matmul(noise, self.noise_embed_W), self.noise_embed_b)
 
-        flag = tf.reshape(attributes_flag, [1, 1])
-        flag = tf.tile(flag, [batch_size, self.flag_shape])
+        flag = tf.reshape(attributes_flag, [batch_size, 1])
+        flag = tf.tile(flag, [1, self.flag_shape])
 
         #In order to generate a sequence from this noise and flag 
         #expand z_hat to be sequence_length*dim_context[1], then reshape

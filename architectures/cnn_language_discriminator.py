@@ -61,8 +61,8 @@ class Discriminator(object):
         embedded_triple = tf.nn.relu(embedded_triple)
         embedded_triple = tf.nn.conv1d(value=embedded_triple, filters=self.triple_embedder_3, stride=1, padding='SAME', data_format='NCHW')
 
-        flag = tf.reshape(attributes_flag, [1, 1, 1])
-        flag = tf.tile(flag, [batch_size, self.flag_shape, self.seq_len])
+        flag = tf.reshape(attributes_flag, [batch_size, 1, 1])
+        flag = tf.tile(flag, [1, self.flag_shape, self.seq_len])
 
         embedded_and_flag = tf.concat([flag, embedded_triple], axis=1)
         resnet_input = embedded_and_flag

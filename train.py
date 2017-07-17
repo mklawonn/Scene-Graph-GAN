@@ -15,7 +15,7 @@ from subprocess import call
 from custom_runner import CustomRunner
 
 class SceneGraphWGAN(object):
-    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, max_iterations=50000):
+    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, max_iterations=50000, convergence_threshold=1e-4):
         self.batch_path = batch_path
         self.batch_path += "/" if self.batch_path[-1] != "/" else ""
         self.path_to_vocab_json = path_to_vocab_json
@@ -64,12 +64,11 @@ class SceneGraphWGAN(object):
         #self.image_feat_dim = 4096
 
         #Hyperparameters
-        self.BATCH_SIZE = BATCH_SIZE
-        self.LAMBDA = LAMBDA
-        self.CRITIC_ITERS = CRITIC_ITERS
+        self.BATCH_SIZE = int(BATCH_SIZE)
+        self.LAMBDA = float(LAMBDA)
+        self.CRITIC_ITERS = int(CRITIC_ITERS)
         self.DIM = 512
-        self.ITERS = 100000
-        self.convergence_threshold = 1e-5
+        self.convergence_threshold = convergence_threshold
 
 
         #Import the correct discriminator according to the keyword argument
@@ -125,39 +124,63 @@ class SceneGraphWGAN(object):
         disc_real = self.Discriminator(triples, ims, self.BATCH_SIZE, flags)
         disc_fake = self.Discriminator(self.fake_inputs, ims, self.BATCH_SIZE, flags)
 
+        disc_cost = tf.constant(0.0)
+        #diff = tf.constant(2*self.convergence_threshold)
+        #Can be anything larger than the convergence_threshold
+        diff = tf.constant(1.0)
+
+        def trainDiscToConvergence(ims, triples, flags, old_disc_cost, diff):
+        
+            disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
+            disc_cost = tf.reduce_mean(disc_cost)
+
+            LAMBDA = tf.constant(self.LAMBDA)
+            
+            # WGAN lipschitz-penalty
+            alpha = tf.random_uniform(
+                shape=[self.BATCH_SIZE,1,1], 
+                minval=0.,
+                maxval=1.
+            )
+            differences = self.fake_inputs - triples
+            #interpolates = triples + (alpha*differences)
+            interpolates = tf.add(triples, tf.multiply(alpha, differences))
+            gradients = tf.gradients(self.Discriminator(interpolates, ims, self.BATCH_SIZE, flags), [interpolates])[0]
+            slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
+            gradient_penalty = tf.reduce_mean((slopes-1.)**2)
+            #disc_cost += self.LAMBDA*gradient_penalty
+            disc_cost = tf.add(disc_cost, tf.multiply(LAMBDA, gradient_penalty))
+            diff = tf.abs(tf.subtract(disc_cost, old_disc_cost))
+
+            disc_params = [v for v in tf.trainable_variables() if v.name.startswith("Discriminator")]
+            
+            disc_train_op = self.disc_optimizer.minimize(disc_cost, var_list=disc_params)
+
+            with tf.control_dependencies([disc_train_op]):
+                return ims, triples, flags, disc_cost, diff
+
+        def discConvergence(ims, triples, flags, disc_cost, diff):
+            #return tf.less(tf.constant(self.convergence_threshold), diff)
+            #return tf.less(tf.constant(-0.1), disc_cost)
+            return tf.logical_or(tf.less(tf.constant(-0.1), disc_cost), tf.less(tf.constant(self.convergence_threshold), diff))
+            #return False
+
+        self.disc_while_loop = tf.while_loop(discConvergence, trainDiscToConvergence, [ims, triples, flags, disc_cost, diff], parallel_iterations=1)
+
         train_variables = tf.trainable_variables()
         gen_params = [v for v in train_variables if v.name.startswith("Generator")]
-        disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
-        assert len(gen_params) > 0
-        assert len(disc_params) > 0
-
-        disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
-        disc_cost = tf.reduce_mean(disc_cost)
-
-        # WGAN lipschitz-penalty
-        alpha = tf.random_uniform(
-            shape=[self.BATCH_SIZE,1,1], 
-            minval=0.,
-            maxval=1.
-        )
-        differences = self.fake_inputs - triples
-        interpolates = triples + (alpha*differences)
-        gradients = tf.gradients(self.Discriminator(interpolates, ims, self.BATCH_SIZE, flags), [interpolates])[0]
-        slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
-        gradient_penalty = tf.reduce_mean((slopes-1.)**2)
-        disc_cost += self.LAMBDA*gradient_penalty
-
-        self.disc_train_op = self.disc_optimizer.minimize(disc_cost, var_list=disc_params)
+        #disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
 
         gen_cost = -tf.reduce_mean(disc_fake, axis=1)
         gen_cost = tf.reduce_mean(gen_cost)
         self.gen_train_op = self.gen_optimizer.minimize(gen_cost, var_list=gen_params)
 
-        tf.summary.scalar("Discriminator Cost", disc_cost)
-        tf.summary.scalar("Generator Cost", gen_cost)
+        #tf.summary.scalar("Discriminator Cost", self.disc_while_loop[3])
+        #tf.summary.scalar("Generator Cost", gen_cost)
 
     
     def Train(self):
+        self.saver = tf.train.Saver()
         self.constructOps()
         summary_op = tf.summary.merge_all()
         with tf.Session(config=tf.ConfigProto(intra_op_parallelism_threads=8)) as sess:
@@ -165,22 +188,23 @@ class SceneGraphWGAN(object):
             sess.run(tf.global_variables_initializer())
             tf.train.start_queue_runners(sess=sess)
             self.custom_runner.start_threads(sess)
-            try:
-                print "Training WGAN for {} iterations. To monitor training via TensorBoard, run python -m tensorflow.tensorboard --logdir {}"\
-                .format(self.max_iterations, self.summaries_dir)
-                for itr in tqdm(range(self.max_iterations)):
-                    sess.run(self.disc_train_op)
-                    sess.run(self.gen_train_op)
-                    if itr % 50 == 0:
-                        summary = sess.run(summary_op)
-                        writer.add_summary(summary, itr)
-                        writer.flush()
-                        #print itr
-            except Exception, e:
-                print e
-            finally:
-                print "Done"
-                #TODO: Save model
+            print "Training WGAN for {} iterations. To monitor training via TensorBoard, run python -m tensorflow.tensorboard --logdir {}"\
+            .format(self.max_iterations, self.summaries_dir)
+            #for itr in tqdm(range(self.max_iterations)):
+            pbar = tqdm(range(self.max_iterations))
+            for itr in pbar:
+                disc = sess.run(self.disc_while_loop)
+                sess.run(self.gen_train_op)
+                #if itr % 50 == 0:
+                    #summary = sess.run(summary_op)
+                    #writer.add_summary(summary, itr)
+                    #writer.flush()
+                    #print "Disc: {}".format(disc[3])
+                pbar.set_description("Disc Cost: {}".format(disc[3]))
+                if itr % 1000 == 0:
+                    self.saver.save(session, os.path.join(self.checkpoints_dir, "model.ckpt"), global_step=itr)
+            print "Done"
+            #TODO: Save model
 
 
 if __name__ == "__main__":
