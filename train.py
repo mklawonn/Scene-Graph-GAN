@@ -119,7 +119,7 @@ class SceneGraphWGAN(object):
             #self.inputs = self.custom_runner.get_inputs()
             ims, triples, flags = self.custom_runner.get_inputs()
 
-        with tf.device("/gpu:{}".format(os.environ['CUDA_VISIBLE_DEVICES'])):
+        with tf.device("/gpu:0"):
             #self.constant_inputs = tf.tuple(self.inputs, name="Constant_inputs")
             #self.constant_ims = self.constant_inputs[0]
             #self.constant_triples = self.constant_inputs[1]
