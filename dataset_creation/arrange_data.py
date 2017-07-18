@@ -34,17 +34,19 @@ def addAttributes(save_path):
 
 
 if __name__ == "__main__":
-    #Read in path to the data
-    with open("./config.txt", "r") as f:
-        for line in f:
-            line_ = line.split()
-            if line_[0] == "visual_genome":
-                path_to_data = line_[1]
-    path_to_data += "/" if path_to_data[-1] != "/" else ""
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--visual_genome", default="./data/", help="The path to the visual genome data. Defaults to ./data")
+
+    args = parser.parse_args()
+    params = vars(args)
+
+    path_to_data = params["visual_genome"]
+
     #Unzip everything
     unzipAll(path_to_data)
     #Create an "all_images" directory
-    all_images = "{}all_images".format(path_to_data)
+    all_images = os.path.join(path_to_data, "all_images")
     if not os.path.exists(all_images):
         os.makedirs(all_images)
     #Move all images to "all_images"
