@@ -180,12 +180,14 @@ class SceneGraphWGAN(object):
         old_disc_cost = -0.1
         diff = 10*self.convergence_threshold
 
-        while True:
+        itr = 0
+        while itr < 10:
             disc_cost, _ = sess.run([self.disc_cost, self.disc_train_op])
             diff = np.abs(disc_cost - old_disc_cost)
             if (diff) < self.convergence_threshold:
                 break
             old_disc_cost = disc_cost
+            itr += 1
 
         gen_cost, _ = sess.run([self.gen_cost, self.gen_train_op])
         return gen_cost, old_disc_cost
