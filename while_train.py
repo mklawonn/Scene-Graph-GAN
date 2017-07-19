@@ -15,13 +15,16 @@ from subprocess import call
 from custom_runner import CustomRunner
 
 class SceneGraphWGAN(object):
-    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, max_iterations=50000, convergence_threshold=1e-5):
+    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir,\
+                 BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, max_iterations=50000, convergence_threshold=1e-4,\
+                 im_and_lang=False, resume=False):
         self.batch_path = batch_path
         self.batch_path += "/" if self.batch_path[-1] != "/" else ""
         self.path_to_vocab_json = path_to_vocab_json
         self.path_to_vocab_json += "/" if self.path_to_vocab_json != "/" else ""
-        #TODO: Change configuration to reflect the convergence criteria rather than CRITIC_ITERS
-        self.configuration = "{}_gen_{}_disc_{}_critic".format(generator, discriminator, CRITIC_ITERS)
+        self.discriminator = discriminator
+        self.generator = generator
+        self.configuration = "{}_gen_{}_disc".format(generator, discriminator, CRITIC_ITERS)
         self.logs_dir = os.path.join(logs_dir, self.configuration)
         self.checkpoints_dir = os.path.join(self.logs_dir, "checkpoints/")
         self.summaries_dir = os.path.join(self.logs_dir, "summaries/")
@@ -111,6 +114,9 @@ class SceneGraphWGAN(object):
             logits = self.d.build_discriminator(image_feats, triple_input, batch_size, attribute_or_relation)
             return logits
 
+    def loadLanguageModel(self):
+        return
+
 
     def constructOps(self):
         #Pin data ops to the cpu
@@ -120,79 +126,78 @@ class SceneGraphWGAN(object):
             ims, triples, flags = self.custom_runner.get_inputs()
 
         with tf.device("/gpu:0"):
-            #self.constant_inputs = tf.tuple(self.inputs, name="Constant_inputs")
-            #self.constant_ims = self.constant_inputs[0]
-            #self.constant_triples = self.constant_inputs[1]
-            #self.constant_flags = self.constant_inputs[2]
-            #self.constant_ims = tf.Variable(ims, name="{}_ims".format(self.queue_var_name), trainable=False)
             self.constant_ims = tf.get_variable("{}_ims".format(self.queue_var_name), initializer=ims, trainable=False)
-            #self.constant_triples = tf.Variable(triples, name="{}_triples".format(self.queue_var_name), trainable=False)
             self.constant_triples = tf.get_variable("{}_triples".format(self.queue_var_name), initializer=triples, trainable=False)
-            #self.constant_flags = tf.Variable(flags, name="{}_flags".format(self.queue_var_name), trainable=False)
             self.constant_flags = tf.get_variable("{}_flags".format(self.queue_var_name), initializer=flags, trainable=False)
-            random_uniform_initializer = tf.random_uniform_initializer(minval=0.0, maxval=1.0)
-            self.constant_alpha = tf.get_variable("{}_alpha".format(self.queue_var_name), shape=[self.BATCH_SIZE, 1, 1], initializer=random_uniform_initializer, trainable=False)
+            #random_uniform_initializer = tf.random_uniform_initializer(minval=0.0, maxval=1.0)
+            #self.constant_alpha = tf.get_variable("{}_alpha".format(self.queue_var_name), shape=[self.BATCH_SIZE, 1, 1], initializer=random_uniform_initializer, trainable=False)
                     
-            self.disc_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
-            self.gen_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
+        self.disc_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
+        self.gen_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
 
-            self.fake_inputs = self.Generator(self.constant_ims, self.BATCH_SIZE, self.constant_flags)
+        self.fake_inputs = self.Generator(self.constant_ims, self.BATCH_SIZE, self.constant_flags)
 
-            initial_disc_cost = tf.constant(0.0)
-            diff = tf.constant(2*self.convergence_threshold)
+        initial_disc_cost = tf.constant(0.0)
+        diff = tf.constant(2*self.convergence_threshold)
 
-            def trainDiscToConvergence(old_disc_cost, diff, itr):
-                disc_real = self.Discriminator(self.constant_triples, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
-                disc_fake = self.Discriminator(self.fake_inputs, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
-                #disc_params = [v for v in tf.trainable_variables() if v.name.startswith("Discriminator")]
-
-                LAMBDA = tf.constant(self.LAMBDA)
-                    
-                # WGAN lipschitz-penalty
-                #alpha = tf.random_uniform(
-                #    shape=[self.BATCH_SIZE,1,1], 
-                #    minval=0.,
-                #    maxval=1.
-                #)
-
-                #differences = self.fake_inputs - self.constant_triples
-                differences = tf.subtract(self.fake_inputs, self.constant_triples)
-                #interpolates = self.constant_triples + (alpha*differences)
-                interpolates = tf.add(self.constant_triples, tf.multiply(self.constant_alpha, differences))
-                gradients = tf.gradients(self.Discriminator(interpolates, self.constant_ims, self.BATCH_SIZE, self.constant_flags), [interpolates])[0]
-                slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
-                gradient_penalty = tf.reduce_mean((slopes-1.)**2)
-                #disc_cost += self.LAMBDA*gradient_penalty
-                
-
-                train_variables = tf.trainable_variables()
-                disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
-
-                disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
-                disc_cost = tf.reduce_mean(disc_cost)
-                disc_cost = tf.add(disc_cost, tf.multiply(LAMBDA, gradient_penalty))
-
-                diff = tf.abs(tf.subtract(disc_cost, old_disc_cost))
-
-                disc_train_op = self.disc_optimizer.minimize(disc_cost, var_list=disc_params)
-
-                with tf.control_dependencies([disc_train_op]):
-                    return disc_cost, diff, tf.add(itr, 1)
-
-            def discConvergence(old_disc_cost, diff, itr):
-                #return tf.less(tf.constant(self.convergence_threshold), diff)
-                #return tf.less(tf.constant(-0.01), disc_cost)
-                return tf.less(itr, tf.constant(10))
-
-            self.disc_while_loop = tf.while_loop(discConvergence, trainDiscToConvergence, [initial_disc_cost, diff, tf.constant(0)])
-
+        def trainDiscToConvergence(old_disc_cost, diff, itr):
+            disc_real = self.Discriminator(self.constant_triples, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
             disc_fake = self.Discriminator(self.fake_inputs, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
-            train_variables = tf.trainable_variables()
-            gen_params = [v for v in train_variables if v.name.startswith("Generator")]
-            gen_cost = -tf.reduce_mean(disc_fake, axis=1)
-            self.gen_cost = tf.reduce_mean(gen_cost)
+            #disc_params = [v for v in tf.trainable_variables() if v.name.startswith("Discriminator")]
 
-            self.gen_train_op = self.gen_optimizer.minimize(self.gen_cost, var_list=gen_params)
+            LAMBDA = tf.constant(self.LAMBDA)
+                
+            # WGAN lipschitz-penalty
+            alpha = tf.random_uniform(
+                shape=[self.BATCH_SIZE,1,1], 
+                minval=0.,
+                maxval=1.
+            )
+
+            #differences = self.fake_inputs - self.constant_triples
+            differences = tf.subtract(self.fake_inputs, self.constant_triples)
+            #interpolates = self.constant_triples + (alpha*differences)
+            interpolates = tf.add(self.constant_triples, tf.multiply(self.alpha, differences))
+            gradients = tf.gradients(self.Discriminator(interpolates, self.constant_ims, self.BATCH_SIZE, self.constant_flags), [interpolates])[0]
+            slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
+            gradient_penalty = tf.reduce_mean((slopes-1.)**2)
+            #disc_cost += self.LAMBDA*gradient_penalty
+            
+
+            train_variables = tf.trainable_variables()
+            disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
+
+            disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
+            disc_cost = tf.reduce_mean(disc_cost)
+            disc_cost = tf.add(disc_cost, tf.multiply(LAMBDA, gradient_penalty))
+
+            diff = tf.abs(tf.subtract(disc_cost, old_disc_cost))
+
+            disc_train_op = self.disc_optimizer.minimize(disc_cost, var_list=disc_params)
+
+            with tf.control_dependencies([disc_train_op]):
+                return disc_cost, diff, tf.add(itr, 1)
+
+        def discConvergence(disc_cost, diff, itr):
+            #return tf.less(tf.constant(self.convergence_threshold), diff)
+            #return tf.less(tf.constant(-0.01), disc_cost)
+            return tf.logical_or(tf.less(tf.constant(-0.1), disc_cost), tf.less(tf.constant(self.convergence_threshold), diff))
+            #return tf.less(itr, tf.constant(10))
+
+        self.disc_while_loop = tf.while_loop(discConvergence, trainDiscToConvergence, [initial_disc_cost, diff, tf.constant(0)])
+
+        disc_fake = self.Discriminator(self.fake_inputs, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
+        train_variables = tf.trainable_variables()
+        gen_params = [v for v in train_variables if v.name.startswith("Generator")]
+
+        if self.im_and_lang:
+            lang_disc_fake = self.loadLanguageModel()
+            gen_cost = tf.add(-tf.reduce_mean(disc_fake, axis=1), -tf.reduce_mean(lang_disc_fake, axis=1))
+        else:
+            gen_cost = -tf.reduce_mean(disc_fake, axis=1)
+
+        self.gen_cost = tf.reduce_mean(gen_cost)
+        self.gen_train_op = self.gen_optimizer.minimize(self.gen_cost, var_list=gen_params)
 
         #tf.summary.scalar("Discriminator Cost", self.disc_while_loop[3])
         #tf.summary.scalar("Generator Cost", gen_cost)
@@ -280,6 +285,6 @@ if __name__ == "__main__":
 
     #Begin training
     wgan = SceneGraphWGAN(batch_path, params["vocab"], params["generator"], params["discriminator"], params["logs_dir"], params["samples_dir"], 
-           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"])
+           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"], resume=params["resume"])
     #wgan.Train(params["epochs"], params["print_interval"])
     wgan.Train()

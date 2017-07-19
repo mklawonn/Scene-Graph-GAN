@@ -6,6 +6,7 @@ import json
 import random
 import argparse
 import threading
+import architectures
 
 import tensorflow as tf
 import numpy as np
@@ -15,13 +16,20 @@ from subprocess import call
 from custom_runner import CustomRunner
 
 class SceneGraphWGAN(object):
-    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir, BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, max_iterations=50000, convergence_threshold=5e-5):
+    def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir,\
+                 BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, max_iterations=50000, convergence_threshold=5e-4,\
+                 im_and_lang=False, resume=False):
+        #TODO Assert that im_and_lang isn't true if a language only discriminator/generator has been chosen
         self.batch_path = batch_path
         self.batch_path += "/" if self.batch_path[-1] != "/" else ""
         self.path_to_vocab_json = path_to_vocab_json
         self.path_to_vocab_json += "/" if self.path_to_vocab_json != "/" else ""
-        #TODO: Change configuration to reflect the convergence criteria rather than CRITIC_ITERS
-        self.configuration = "{}_gen_{}_disc_{}_critic".format(generator, discriminator, CRITIC_ITERS)
+        self.discriminator = discriminator
+        self.generator = generator
+        if im_and_lang:
+            self.configuration = "{}_gen_{}_disc_with_lang".format(generator, discriminator)
+        else:
+            self.configuration = "{}_gen_{}_disc".format(generator, discriminator)
         self.logs_dir = os.path.join(logs_dir, self.configuration)
         self.checkpoints_dir = os.path.join(self.logs_dir, "checkpoints/")
         self.summaries_dir = os.path.join(self.logs_dir, "summaries/")
@@ -31,10 +39,14 @@ class SceneGraphWGAN(object):
         self.queue_capacity = 5000
         self.queue_var_name = "queue_var"
 
+        self.im_and_lang = im_and_lang
+        self.resume = resume
+
         if not os.path.exists(self.checkpoints_dir):
             os.makedirs(self.checkpoints_dir)
         else:
-            print "WARNING: Checkpoints directory already exists for {} configuration. Files will be overwritten.".format(self.configuration)
+            if not self.resume:
+                print "WARNING: Checkpoints directory already exists for {} configuration and the resume flag was not specified. Files will be overwritten as necessary (not deleted though)".format(self.configuration)
 
         if not os.path.exists(self.summaries_dir):
             os.makedirs(self.summaries_dir)
@@ -99,6 +111,11 @@ class SceneGraphWGAN(object):
         with tf.variable_scope("Discriminator") as scope:
             self.d = Discriminator(self.vocab_size, batch_size = self.BATCH_SIZE)
 
+        if self.im_and_lang:
+            from architectures.cnn_language_discriminator import Discriminator as language_dim
+            with tf.variable_scope("LanguageDiscriminator") as scope:
+                self.language_d = language_dim(self.vocab_size, batch_size = self.BATCH_SIZE)
+
     def Generator(self, image_feats, batch_size, attribute_or_relation, prev_outputs=None):
         print "Building Generator"
         with tf.variable_scope("Generator", reuse=True) as scope:
@@ -111,6 +128,11 @@ class SceneGraphWGAN(object):
             logits = self.d.build_discriminator(image_feats, triple_input, batch_size, attribute_or_relation)
             return logits
 
+    def LanguageDiscriminator(self, triple_input, image_feats, batch_size, attribute_or_relation):
+        print "Building Language Discriminator"
+        with tf.variable_scope("LanguageDiscriminator") as scope:
+            logits = self.language_d.build_discriminator(image_feats, triple_input, batch_size, attribute_or_relation)
+            return logits
 
     def constructOps(self):
         #Pin data ops to the cpu
@@ -120,13 +142,9 @@ class SceneGraphWGAN(object):
             ims, triples, flags = self.custom_runner.get_inputs()
 
         with tf.device("/gpu:0"):
-            #self.constant_inputs = tf.tuple(self.inputs, name="Constant_inputs")
-            #self.constant_ims = self.constant_inputs[0]
-            #self.constant_triples = self.constant_inputs[1]
-            #self.constant_flags = self.constant_inputs[2]
-            self.constant_ims = tf.Variable(ims, name="{}_ims".format(self.queue_var_name))
-            self.constant_triples = tf.Variable(triples, name="{}_triples".format(self.queue_var_name))
-            self.constant_flags = tf.Variable(flags, name="{}_flags".format(self.queue_var_name))
+            self.constant_ims = tf.get_variable("{}_ims".format(self.queue_var_name), initializer=ims, trainable=False)
+            self.constant_triples = tf.get_variable("{}_triples".format(self.queue_var_name), initializer=triples, trainable=False)
+            self.constant_flags = tf.get_variable("{}_flags".format(self.queue_var_name), initializer=flags, trainable=False)
                     
         self.disc_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
         self.gen_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
@@ -136,8 +154,6 @@ class SceneGraphWGAN(object):
         disc_real = self.Discriminator(self.constant_triples, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
         disc_fake = self.Discriminator(self.fake_inputs, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
 
-        disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
-        disc_cost = tf.reduce_mean(disc_cost)
 
         LAMBDA = tf.constant(self.LAMBDA)
         
@@ -151,18 +167,58 @@ class SceneGraphWGAN(object):
         differences = tf.subtract(self.fake_inputs, self.constant_triples)
         #interpolates = triples + (alpha*differences)
         interpolates = tf.add(self.constant_triples, tf.multiply(alpha, differences))
+
         gradients = tf.gradients(self.Discriminator(interpolates, self.constant_ims, self.BATCH_SIZE, self.constant_flags), [interpolates])[0]
         slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
         gradient_penalty = tf.reduce_mean((slopes-1.)**2)
         #disc_cost += self.LAMBDA*gradient_penalty
+        disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
+        disc_cost = tf.reduce_mean(disc_cost)
         self.disc_cost = tf.add(disc_cost, tf.multiply(LAMBDA, gradient_penalty))
 
-        train_variables = tf.trainable_variables()
-        gen_params = [v for v in train_variables if v.name.startswith("Generator")]
-        disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
 
-        gen_cost = -tf.reduce_mean(disc_fake, axis=1)
-        self.gen_cost = tf.reduce_mean(gen_cost)
+        #TODO Why does adding the language critic blow it up
+
+        if self.im_and_lang:
+            self.lang_disc_optimizer = tf.train.AdamOptimizer(learning_rate=-1e-4, beta1=0.5, beta2=0.9)
+            lang_disc_real = self.LanguageDiscriminator(self.constant_triples, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
+            lang_disc_fake = self.LanguageDiscriminator(self.fake_inputs, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
+            #lang_disc_cost = tf.reduce_mean(lang_disc_fake, axis=1) - tf.reduce_mean(lang_disc_real, axis=1)
+            lang_disc_cost = tf.reduce_mean(lang_disc_fake) - tf.reduce_mean(lang_disc_real)
+
+            lang_LAMBDA = tf.constant(self.LAMBDA)
+
+            lang_alpha = tf.random_uniform(
+                shape=[self.BATCH_SIZE,1,1],
+                minval=0.,
+                maxval=1.
+            )
+            lang_differences = tf.subtract(self.fake_inputs, self.constant_triples)
+            lang_interpolates = tf.add(self.constant_triples, tf.multiply(lang_alpha, lang_differences))
+
+            #Language discriminator WGAN lipschitz-penalty
+            lang_gradients = tf.gradients(self.LanguageDiscriminator(lang_interpolates, self.constant_ims, self.BATCH_SIZE, self.constant_flags), [lang_interpolates])[0]
+            lang_slopes = tf.sqrt(tf.reduce_sum(tf.square(lang_gradients), reduction_indices=[1,2]))
+            lang_gradient_penalty = tf.reduce_mean((lang_slopes-1.)**2)
+            self.lang_disc_cost = tf.add(lang_disc_cost, tf.multiply(lang_LAMBDA, lang_gradient_penalty))
+
+            #gen_cost = tf.add(-tf.reduce_mean(disc_fake), -tf.reduce_mean(lang_disc_fake))
+            gen_cost_disc = -tf.reduce_mean(disc_fake, axis=1)
+            gen_cost_disc = tf.reduce_mean(gen_cost_disc)
+            gen_cost_lang_disc = -tf.reduce_mean(lang_disc_fake, axis=1)
+            gen_cost_lang_disc = tf.reduce_mean(gen_cost_lang_disc)
+            self.gen_cost = tf.add(gen_cost_disc, gen_cost_lang_disc)
+        else:
+            gen_cost = -tf.reduce_mean(disc_fake, axis=1)
+            self.gen_cost = tf.reduce_mean(gen_cost)
+
+        train_variables = tf.trainable_variables()
+        disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
+        gen_params = [v for v in train_variables if v.name.startswith("Generator")]
+
+        if self.im_and_lang:
+            lang_disc_params = [v for v in train_variables if v.name.startswith("LanguageDiscriminator")]
+            self.lang_disc_train_op = self.lang_disc_optimizer.minimize(self.lang_disc_cost, var_list=lang_disc_params)
 
         self.gen_train_op = self.gen_optimizer.minimize(self.gen_cost, var_list=gen_params)
         self.disc_train_op = self.disc_optimizer.minimize(self.disc_cost, var_list=disc_params)
@@ -179,36 +235,66 @@ class SceneGraphWGAN(object):
 
         old_disc_cost = -0.1
         diff = 10*self.convergence_threshold
+        disc_not_converged = True
+        lang_not_converged = False
 
-        itr = 0
-        while itr < 10:
-            disc_cost, _ = sess.run([self.disc_cost, self.disc_train_op])
-            diff = np.abs(disc_cost - old_disc_cost)
-            if (diff) < self.convergence_threshold:
-                break
-            old_disc_cost = disc_cost
-            itr += 1
+        if self.im_and_lang:
+            old_lang_disc_cost = -0.1
+            lang_diff = 10*self.convergence_threshold
+            lang_not_converged = True
+
+        #while lang_not_converged or disc_not_converged:
+        for i in range(10):
+            if disc_not_converged:
+                #disc_cost, _ = sess.run([self.disc_cost, self.disc_train_op])
+                #diff = np.abs(disc_cost - old_disc_cost)
+                old_disc_cost = -0.1
+
+            if self.im_and_lang and lang_not_converged:
+                lang_disc_cost, _ = sess.run([self.lang_disc_cost, self.lang_disc_train_op])
+                lang_diff = np.abs(lang_disc_cost - old_lang_disc_cost)
+                if ((lang_disc_cost < -0.1) and (lang_diff < self.convergence_threshold)):
+                    print "Lang converged"
+                    lang_not_converged = False
+                old_lang_disc_cost = lang_disc_cost
+
+            if (diff < self.convergence_threshold) and (disc_cost < -0.1):
+                print "Disc converged"
+                disc_not_converged = False
+
+            #old_disc_cost = disc_cost
 
         gen_cost, _ = sess.run([self.gen_cost, self.gen_train_op])
-        return gen_cost, old_disc_cost
+        if self.im_and_lang:
+            return gen_cost, old_disc_cost, old_lang_disc_cost
+        else:
+            return gen_cost, old_disc_cost
 
     def init(self):
         variables = [v for v in tf.global_variables() if self.queue_var_name not in v.name]
         return tf.variables_initializer(variables) 
 
+    def loadModel(self, sess):
+        self.saver.restore(sess, os.path.join(self.checkpoints_dir, "model.ckpt"))
+
+    def saveModel(self, sess, itr):
+        self.saver.save(sess, os.path.join(self.checkpoints_dir, "model.ckpt"), global_step=itr)
     
     def Train(self):
-        self.saver = tf.train.Saver()
+        #Call this just in case the graph is persisting due to TF closing suddenly
         self.constructOps()
-        summary_op = tf.summary.merge_all()
+        self.saver = tf.train.Saver()
+        init_op = self.init()
         #Need to initialize in a non-naive way because some variables rely on the 
         #queue being populated, but you can't populate the queue until you initialize
         #the other variables. See init function for implementation.
-        init_op = self.init()
         with tf.Session(config=tf.ConfigProto(intra_op_parallelism_threads=8)) as sess:
             writer = tf.summary.FileWriter(self.summaries_dir, sess.graph)
             print "Initializing Variables"
-            sess.run(init_op)
+            if self.resume:
+                self.loadModel(sess)
+            else:
+                sess.run(init_op)
             print "Done"
             print "Starting Queue"
             tf.train.start_queue_runners(sess=sess)
@@ -218,12 +304,16 @@ class SceneGraphWGAN(object):
             .format(self.max_iterations, self.summaries_dir)
             pbar = tqdm(range(self.max_iterations))
             for itr in pbar:
-                gen_cost, disc_cost = self.oneTrainingIteration(sess)
-                pbar.set_description("Disc Cost: {}".format(disc_cost))
+                if self.im_and_lang:
+                    gen_cost, disc_cost, lang_disc = self.oneTrainingIteration(sess)
+                    pbar.set_description("Gen Cost: {} Disc Cost: {} Lang Disc: {}".format(gen_cost, disc_cost, lang_disc))
+                else:
+                    gen_cost, disc_cost = self.oneTrainingIteration(sess)
+                    pbar.set_description("Gen Cost: {} Disc Cost: {}".format(gen_cost, disc_cost))
                 if itr % 1000 == 0:
-                    self.saver.save(sess, os.path.join(self.checkpoints_dir, "model.ckpt"), global_step=itr)
+                    self.saveModel(sess, itr)
             print "Done"
-            self.saver.save(sess, os.path.join(self.checkpoints_dir, "model.ckpt"), global_step=itr)
+            self.saveModel(sess, itr)
 
 
 if __name__ == "__main__":
@@ -240,10 +330,11 @@ if __name__ == "__main__":
     parser.add_argument("--generator", default="lstm", help="Generator defaults to LSTM with attention. See the architectures folder.")
     parser.add_argument("--discriminator", default="lstm", help="Discriminator defaults to LSTM with attention. See the architectures folder.")
     parser.add_argument("--epochs", default=30, help="Number of epochs defaults to 30", type=int)
-    parser.add_argument("--resume", default=False, help="Resume training from the last checkpoint for this configuration", type=bool)
     parser.add_argument("--print_interval", default=500, help="The model will be saved and samples will be generated every <print_interval> iterations", type=int)
     parser.add_argument("--tf_verbosity", default="ERROR", help="Sets tensorflow verbosity. Specifies which warning level to suppress. Defaults to ERROR")
     parser.add_argument("--lambda", default=10, help="Lambda term which regularizes to be close to one lipschitz", type=int)
+    parser.add_argument("--use_language", default=False, help="Determines whether the generator update is also based on a discriminator trained on language only", type=bool)
+    parser.add_argument("--resume", default=False, help="Resume training from the last checkpoint for this configuration", type=bool)
 
     parser.add_argument("--GPU", default="0", help="Which GPU to use")
 
@@ -258,8 +349,11 @@ if __name__ == "__main__":
     os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
     os.environ['CUDA_VISIBLE_DEVICES'] = params["GPU"]
 
+    #Reset just in case
+    tf.reset_default_graph()
+
     #Begin training
     wgan = SceneGraphWGAN(batch_path, params["vocab"], params["generator"], params["discriminator"], params["logs_dir"], params["samples_dir"], 
-           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"])
+           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"], im_and_lang=params["use_language"], resume=params["resume"])
     #wgan.Train(params["epochs"], params["print_interval"])
     wgan.Train()
