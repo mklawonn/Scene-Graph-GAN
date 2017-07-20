@@ -47,8 +47,8 @@ class Discriminator(object):
         self.output_W_1 = tf.get_variable("output_W_1", [(self.flag_shape+dim_hidden)*seq_len, dim_hidden], initializer=he_initializer)
         self.output_b_1 = tf.get_variable("output_b_1", [dim_hidden], initializer=constant_initializer)
 
-        self.output_W_2 = tf.get_variable("output_W_2", [dim_hidden, 1], initializer=he_initializer)
-        self.output_b_2 = tf.get_variable("output_b_2", [1], initializer=constant_initializer)
+        self.output_W_2 = tf.get_variable("output_W_2", [dim_hidden, seq_len], initializer=he_initializer)
+        self.output_b_2 = tf.get_variable("output_b_2", [seq_len], initializer=constant_initializer)
 
 
         

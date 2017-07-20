@@ -169,6 +169,7 @@ class Discriminator(object):
         #all_logits = tf.stack(logits_list)
         #We want it in shape [batch_size, seq_len, 1]
         all_logits = tf.transpose(logits_list, [1,0,2], name="all_logits")
+        all_logits = tf.reshape(all_logits, [batch_size, self.maxlen])
         return all_logits
 
     

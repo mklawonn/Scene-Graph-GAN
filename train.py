@@ -17,7 +17,7 @@ from custom_runner import CustomRunner
 
 class SceneGraphWGAN(object):
     def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir,\
-                 BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, max_iterations=50000, convergence_threshold=5e-4,\
+                 BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, max_iterations=50000, convergence_threshold=5e-5,\
                  im_and_lang=False, resume=False):
         #TODO Assert that im_and_lang isn't true if a language only discriminator/generator has been chosen
         self.batch_path = batch_path
@@ -126,13 +126,11 @@ class SceneGraphWGAN(object):
         print "Building Discriminator"
         with tf.variable_scope("Discriminator", reuse=True) as scope:
             logits = self.d.build_discriminator(image_feats, triple_input, batch_size, attribute_or_relation)
-            return logits
-
-    def LanguageDiscriminator(self, triple_input, image_feats, batch_size, attribute_or_relation):
-        print "Building Language Discriminator"
-        with tf.variable_scope("LanguageDiscriminator") as scope:
-            logits = self.language_d.build_discriminator(image_feats, triple_input, batch_size, attribute_or_relation)
-            return logits
+            if self.im_and_lang:
+                lang_logits = self.language_d.build_discriminator(image_feats, triple_input, batch_size, attribute_or_relation)
+                return tf.add(logits, lang_logits)
+            else:
+                return logits
 
     def constructOps(self):
         #Pin data ops to the cpu
@@ -145,15 +143,25 @@ class SceneGraphWGAN(object):
             self.constant_ims = tf.get_variable("{}_ims".format(self.queue_var_name), initializer=ims, trainable=False)
             self.constant_triples = tf.get_variable("{}_triples".format(self.queue_var_name), initializer=triples, trainable=False)
             self.constant_flags = tf.get_variable("{}_flags".format(self.queue_var_name), initializer=flags, trainable=False)
-                    
+            self.disc_step = tf.get_variable("{}_disc_step".format(self.queue_var_name), shape=[], initializer=tf.constant_initializer(0), trainable=False)
+
         self.disc_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
-        self.gen_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
+        #self.gen_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
+
+        self.global_step = tf.get_variable("global_step", shape=[], initializer=tf.constant_initializer(0), trainable=False)
+
+        #disc_optimizer_decay = tf.train.exponential_decay(1e-2, self.disc_step, 10, .95, staircase=True)
+        gen_optimizer_decay = tf.train.exponential_decay(1e-3, self.global_step, 10000, .9, staircase=True)
+        #self.disc_optimizer = tf.train.GradientDescentOptimizer(disc_optimizer_decay)
+        self.gen_optimizer = tf.train.GradientDescentOptimizer(gen_optimizer_decay)
 
         self.fake_inputs = self.Generator(self.constant_ims, self.BATCH_SIZE, self.constant_flags)
 
         disc_real = self.Discriminator(self.constant_triples, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
         disc_fake = self.Discriminator(self.fake_inputs, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
 
+        disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
+        disc_cost = tf.reduce_mean(disc_cost)
 
         LAMBDA = tf.constant(self.LAMBDA)
         
@@ -163,69 +171,24 @@ class SceneGraphWGAN(object):
             minval=0.,
             maxval=1.
         )
-        #differences = self.fake_inputs - self.constant_triples
         differences = tf.subtract(self.fake_inputs, self.constant_triples)
-        #interpolates = triples + (alpha*differences)
         interpolates = tf.add(self.constant_triples, tf.multiply(alpha, differences))
-
         gradients = tf.gradients(self.Discriminator(interpolates, self.constant_ims, self.BATCH_SIZE, self.constant_flags), [interpolates])[0]
         slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
         gradient_penalty = tf.reduce_mean((slopes-1.)**2)
-        #disc_cost += self.LAMBDA*gradient_penalty
-        disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
-        disc_cost = tf.reduce_mean(disc_cost)
         self.disc_cost = tf.add(disc_cost, tf.multiply(LAMBDA, gradient_penalty))
 
-
-        #TODO Why does adding the language critic blow it up
-
-        if self.im_and_lang:
-            self.lang_disc_optimizer = tf.train.AdamOptimizer(learning_rate=-1e-4, beta1=0.5, beta2=0.9)
-            lang_disc_real = self.LanguageDiscriminator(self.constant_triples, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
-            lang_disc_fake = self.LanguageDiscriminator(self.fake_inputs, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
-            #lang_disc_cost = tf.reduce_mean(lang_disc_fake, axis=1) - tf.reduce_mean(lang_disc_real, axis=1)
-            lang_disc_cost = tf.reduce_mean(lang_disc_fake) - tf.reduce_mean(lang_disc_real)
-
-            lang_LAMBDA = tf.constant(self.LAMBDA)
-
-            lang_alpha = tf.random_uniform(
-                shape=[self.BATCH_SIZE,1,1],
-                minval=0.,
-                maxval=1.
-            )
-            lang_differences = tf.subtract(self.fake_inputs, self.constant_triples)
-            lang_interpolates = tf.add(self.constant_triples, tf.multiply(lang_alpha, lang_differences))
-
-            #Language discriminator WGAN lipschitz-penalty
-            lang_gradients = tf.gradients(self.LanguageDiscriminator(lang_interpolates, self.constant_ims, self.BATCH_SIZE, self.constant_flags), [lang_interpolates])[0]
-            lang_slopes = tf.sqrt(tf.reduce_sum(tf.square(lang_gradients), reduction_indices=[1,2]))
-            lang_gradient_penalty = tf.reduce_mean((lang_slopes-1.)**2)
-            self.lang_disc_cost = tf.add(lang_disc_cost, tf.multiply(lang_LAMBDA, lang_gradient_penalty))
-
-            #gen_cost = tf.add(-tf.reduce_mean(disc_fake), -tf.reduce_mean(lang_disc_fake))
-            gen_cost_disc = -tf.reduce_mean(disc_fake, axis=1)
-            gen_cost_disc = tf.reduce_mean(gen_cost_disc)
-            gen_cost_lang_disc = -tf.reduce_mean(lang_disc_fake, axis=1)
-            gen_cost_lang_disc = tf.reduce_mean(gen_cost_lang_disc)
-            self.gen_cost = tf.add(gen_cost_disc, gen_cost_lang_disc)
-        else:
-            gen_cost = -tf.reduce_mean(disc_fake, axis=1)
-            self.gen_cost = tf.reduce_mean(gen_cost)
-
         train_variables = tf.trainable_variables()
-        disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
         gen_params = [v for v in train_variables if v.name.startswith("Generator")]
+        disc_params = [v for v in train_variables if v.name.startswith("Discriminator") or v.name.startswith("LanguageDiscriminator")]
 
-        if self.im_and_lang:
-            lang_disc_params = [v for v in train_variables if v.name.startswith("LanguageDiscriminator")]
-            self.lang_disc_train_op = self.lang_disc_optimizer.minimize(self.lang_disc_cost, var_list=lang_disc_params)
+        gen_cost = -tf.reduce_mean(disc_fake, axis=1)
+        self.gen_cost = tf.reduce_mean(gen_cost)
 
-        self.gen_train_op = self.gen_optimizer.minimize(self.gen_cost, var_list=gen_params)
-        self.disc_train_op = self.disc_optimizer.minimize(self.disc_cost, var_list=disc_params)
-
-        #tf.summary.scalar("Discriminator Cost", self.disc_while_loop[3])
-        #tf.summary.scalar("Generator Cost", gen_cost)
-
+        self.gen_train_op = self.gen_optimizer.minimize(self.gen_cost, var_list=gen_params, global_step=self.global_step)
+        self.disc_train_op = self.disc_optimizer.minimize(self.disc_cost, var_list=disc_params, gate_gradients=self.disc_optimizer.GATE_GRAPH, global_step=self.disc_step)
+                    
+        
     def oneTrainingIteration(self, sess):
         #This tf_variables_initializer op runs the dequeue operation just once for all following operations
         #See https://stackoverflow.com/questions/43970221/how-to-read-the-top-of-a-queue-multiple-times-before-dequeueing-in-tensorflow
@@ -235,40 +198,21 @@ class SceneGraphWGAN(object):
 
         old_disc_cost = -0.1
         diff = 10*self.convergence_threshold
-        disc_not_converged = True
-        lang_not_converged = False
 
-        if self.im_and_lang:
-            old_lang_disc_cost = -0.1
-            lang_diff = 10*self.convergence_threshold
-            lang_not_converged = True
-
-        #while lang_not_converged or disc_not_converged:
-        for i in range(10):
-            if disc_not_converged:
-                #disc_cost, _ = sess.run([self.disc_cost, self.disc_train_op])
-                #diff = np.abs(disc_cost - old_disc_cost)
-                old_disc_cost = -0.1
-
-            if self.im_and_lang and lang_not_converged:
-                lang_disc_cost, _ = sess.run([self.lang_disc_cost, self.lang_disc_train_op])
-                lang_diff = np.abs(lang_disc_cost - old_lang_disc_cost)
-                if ((lang_disc_cost < -0.1) and (lang_diff < self.convergence_threshold)):
-                    print "Lang converged"
-                    lang_not_converged = False
-                old_lang_disc_cost = lang_disc_cost
-
-            if (diff < self.convergence_threshold) and (disc_cost < -0.1):
-                print "Disc converged"
-                disc_not_converged = False
-
-            #old_disc_cost = disc_cost
+        itr = 0
+        while True:
+            disc_cost, _= sess.run([self.disc_cost, self.disc_train_op])
+            diff = np.abs(disc_cost - old_disc_cost)
+            if (diff < self.convergence_threshold) and (disc_cost < 0):
+            #if (diff < self.convergence_threshold):
+                break
+            old_disc_cost = disc_cost
+            itr += 1
+        #print itr
 
         gen_cost, _ = sess.run([self.gen_cost, self.gen_train_op])
-        if self.im_and_lang:
-            return gen_cost, old_disc_cost, old_lang_disc_cost
-        else:
-            return gen_cost, old_disc_cost
+        return gen_cost, old_disc_cost
+
 
     def init(self):
         variables = [v for v in tf.global_variables() if self.queue_var_name not in v.name]
@@ -281,7 +225,6 @@ class SceneGraphWGAN(object):
         self.saver.save(sess, os.path.join(self.checkpoints_dir, "model.ckpt"), global_step=itr)
     
     def Train(self):
-        #Call this just in case the graph is persisting due to TF closing suddenly
         self.constructOps()
         self.saver = tf.train.Saver()
         init_op = self.init()
@@ -304,12 +247,8 @@ class SceneGraphWGAN(object):
             .format(self.max_iterations, self.summaries_dir)
             pbar = tqdm(range(self.max_iterations))
             for itr in pbar:
-                if self.im_and_lang:
-                    gen_cost, disc_cost, lang_disc = self.oneTrainingIteration(sess)
-                    pbar.set_description("Gen Cost: {} Disc Cost: {} Lang Disc: {}".format(gen_cost, disc_cost, lang_disc))
-                else:
-                    gen_cost, disc_cost = self.oneTrainingIteration(sess)
-                    pbar.set_description("Gen Cost: {} Disc Cost: {}".format(gen_cost, disc_cost))
+                gen_cost, disc_cost = self.oneTrainingIteration(sess)
+                pbar.set_description("Gen Cost: {} Disc Cost: {}".format(gen_cost, disc_cost))
                 if itr % 1000 == 0:
                     self.saveModel(sess, itr)
             print "Done"
@@ -325,7 +264,7 @@ if __name__ == "__main__":
     parser.add_argument("--samples_dir", default="./samples/", help="The path to the samples dir where samples will be generated.")
     parser.add_argument("--vocab", default="./preprocessing/vocab.json", help="Path to the vocabulary")
 
-    parser.add_argument("--batch_size", default=256, help="Batch size defaults to 64", type=int)
+    parser.add_argument("--batch_size", default=128, help="Batch size defaults to 128", type=int)
     parser.add_argument("--critic_iters", default=10, help="Number of iterations to train the critic", type=int)
     parser.add_argument("--generator", default="lstm", help="Generator defaults to LSTM with attention. See the architectures folder.")
     parser.add_argument("--discriminator", default="lstm", help="Discriminator defaults to LSTM with attention. See the architectures folder.")
@@ -349,7 +288,7 @@ if __name__ == "__main__":
     os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
     os.environ['CUDA_VISIBLE_DEVICES'] = params["GPU"]
 
-    #Reset just in case
+    #Call this just in case the graph is persisting due to TF closing suddenly
     tf.reset_default_graph()
 
     #Begin training
