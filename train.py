@@ -187,6 +187,8 @@ class SceneGraphWGAN(object):
 
         self.gen_train_op = self.gen_optimizer.minimize(self.gen_cost, var_list=gen_params, global_step=self.global_step)
         self.disc_train_op = self.disc_optimizer.minimize(self.disc_cost, var_list=disc_params, gate_gradients=self.disc_optimizer.GATE_GRAPH, global_step=self.disc_step)
+
+        self.saver = tf.train.Saver()
                     
         
     def oneTrainingIteration(self, sess):
@@ -219,14 +221,18 @@ class SceneGraphWGAN(object):
         return tf.variables_initializer(variables) 
 
     def loadModel(self, sess):
-        self.saver.restore(sess, os.path.join(self.checkpoints_dir, "model.ckpt"))
+        ckpt = tf.train.get_checkpoint_state(os.path.dirname(os.path.join(self.checkpoints_dir, "model.ckpt")))
+        if ckpt and ckpt.model_checkpoint_path:
+            self.saver.restore(sess, ckpt.model_checkpoint_path)
+        else:
+            print "Problem loading model, exiting"
+            sys.exit(1)
 
     def saveModel(self, sess, itr):
-        self.saver.save(sess, os.path.join(self.checkpoints_dir, "model.ckpt"), global_step=itr)
+        self.saver.save(sess, os.path.join(self.checkpoints_dir, "model.ckpt"), global_step=self.global_step)
     
     def Train(self):
         self.constructOps()
-        self.saver = tf.train.Saver()
         init_op = self.init()
         #Need to initialize in a non-naive way because some variables rely on the 
         #queue being populated, but you can't populate the queue until you initialize
@@ -235,7 +241,9 @@ class SceneGraphWGAN(object):
             writer = tf.summary.FileWriter(self.summaries_dir, sess.graph)
             print "Initializing Variables"
             if self.resume:
+                print "Resuming training, loading model"
                 self.loadModel(sess)
+                print "Model loaded, global step is {}".format(sess.run(self.global_step))
             else:
                 sess.run(init_op)
             print "Done"
@@ -280,6 +288,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     params = vars(args)
 
+    #TODO: Need to change this such that the input visual genome path is the batch path
+    #this is in order to support multiple train/test splits
     batch_path = os.path.join(params["visual_genome"], "batches")
 
     verbosity_dict = {"DEBUG" : 0, "INFO" : 1, "WARN" : 2, "ERROR" : 3}
