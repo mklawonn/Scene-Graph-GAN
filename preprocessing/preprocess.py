@@ -1,7 +1,6 @@
 import os, sys
 sys.path.append(os.getcwd())
 
-import preprocessing.local as vg
 import tensorflow as tf
 import numpy as np
 import os
@@ -13,8 +12,8 @@ from itertools import izip_longest
 from tqdm import tqdm
 
 def computeImageMean(image_dir):
-    if os.path.exists("./preprocessing/image_mean.txt"):
-        means = open("./preprocessing/image_mean.txt", "r").read().strip().split()
+    if os.path.exists("./preprocessing/saved_data/image_mean.txt"):
+        means = open("./preprocessing/saved_data/image_mean.txt", "r").read().strip().split()
         r_mean = float(means[0])
         g_mean = float(means[1])
         b_mean = float(means[2])
@@ -46,7 +45,7 @@ def computeImageMean(image_dir):
     g_mean = g_total / float(num_images)
     b_mean = b_total / float(num_images)
 
-    with open("./preprocessing/image_mean.txt", "w") as f:
+    with open("./preprocessing/saved_data/image_mean.txt", "w") as f:
         f.write("{} {} {}".format(r_mean, g_mean, b_mean))
 
     return r_mean, g_mean, b_mean
@@ -99,8 +98,8 @@ def normalizeFeatures(train_path, batch_dir):
 #When the vocab is built, the first entry is the index and the second entry is
 #a count indicating how many times that word appears in the vocabulary
 def buildVocab(sg_dict):
-    if os.path.exists("./preprocessing/vocab.json"):
-        with open("./preprocessing/vocab.json", "r") as f:
+    if os.path.exists("./preprocessing/saved_data/vocab.json"):
+        with open("./preprocessing/saved_data/vocab.json", "r") as f:
             vocab = json.load(f)
         return vocab
     vocab = {}
@@ -149,7 +148,7 @@ def buildVocab(sg_dict):
             #The subject and object should both already be added
             #via the objects loop above
 
-    with open(".preprocessin/vocab.json", "w") as f:
+    with open(".preprocessing/saved_data/vocab.json", "w") as f:
         json.dump(vocab, f)
 
     return vocab
@@ -158,7 +157,7 @@ def pruneVocab(vocab, threshold=10):
     for k,v  in vocab.items():
         if v[1] < threshold:
             del vocab[k]
-    with open("./preprocessing/vocab.json", "w") as f:
+    with open("./preprocessing/saved_data/vocab.json", "w") as f:
         json.dump(vocab, f)
 
 def reIndexVocab(vocab):
@@ -166,7 +165,7 @@ def reIndexVocab(vocab):
     for item in vocab:
         vocab[item][0] = i
         i += 1
-    with open("./preprocessing/vocab.json", "w") as f:
+    with open("./preprocessing/saved_data/vocab.json", "w") as f:
         json.dump(vocab, f)
 
 #For a single scene graph, return the attribute and relationship triples
@@ -349,7 +348,7 @@ def writeFilenameToFeatDict(eval_path):
     with open(path_to_dict, "w") as dict_file:
         json.dump(filename_to_feats, dict_file)
 
-def toNPZ(path_to_data, vgg_tf_model):
+def toNPZ(path_to_data, path_to_images, out_path, vgg_tf_model):
     path_to_data += "/" if path_to_data[-1] != "/" else ""
     path_to_images = os.path.join(path_to_data, "all_images/")
     print "Computing Image Mean"
@@ -375,8 +374,9 @@ def toNPZ(path_to_data, vgg_tf_model):
     print "Size of vocabulary after pruning"
     print len(vocab)
 
-    if os.path.exists(os.path.join("preprocessing", "image_file_list.json")):
-        with open(os.path.join("preprocessing", "image_file_list.json"), "r") as f:
+    image_file_list = os.path.join(os.path.join("preprocessing", "saved_data"), "image_file_list.json")
+    if os.path.exists(image_file_list):
+        with open(image_file_list, "r") as f:
             image_files = json.load(f)
         #Convert to int
         image_files = {int(i):image_files[i] for i in image_files}
@@ -394,7 +394,7 @@ def toNPZ(path_to_data, vgg_tf_model):
                 bad.append(im_id)
         image_files = {im_id:image_files[im_id] for im_id in image_files if im_id not in bad}
         print "Done"
-        with open(os.path.join("preprocessing", "image_file_list.json"), "w") as f:
+        with open(image_file_list, "w") as f:
             json.dump(image_files, f)
 
     print "Splitting into training and eval"
@@ -410,8 +410,8 @@ def toNPZ(path_to_data, vgg_tf_model):
     print "Done"
 
     #Create directory for training batches and eval batches
-    train_path = os.path.join(path_to_data, "batches/train")
-    eval_path = os.path.join(path_to_data, "batches/eval")
+    train_path = os.path.join(out_path, "train")
+    eval_path = os.path.join(out_path, "eval")
 
     if not os.path.exists(train_path):
         os.makedirs(train_path)
@@ -439,14 +439,17 @@ def toNPZ(path_to_data, vgg_tf_model):
     writeFilenameToFeatDict(eval_path)
 
 if __name__ == "__main__":
-    with open("./config.txt", "r") as f:
-        for line in f:
-            line_ = line.split()
-            if line_[0] == "visual_genome":
-                path_to_data = line_[1]
-            elif line_[0] == "vgg_tf_model":
-                vgg_tf_model = line_[1]
+    parser = argparse.ArgumentParser()
 
-    path_to_data += "/" if path_to_data[-1] != "/" else ""
+    parser.add_argument("--visual_genome", default="./data/", help="The path to the visual genome data. Defaults to ./data")
+    parser.add_argument("--vg_images", default="./data/all_images/", help="The path to the visual genome images. Defaults to ./data/all_images/")
+    parser.add_argument("--vg_data", default="./data/batches/", help="The path where you want to save batches. For this script defaults to ./data/lu_et_al_batches")
+    parser.add_argument("--vgg_model", default="./models/vgg/vgg16.tfmodel", help="The path to the VGG tensorflow model definition")
 
-    toNPZ(path_to_data, vgg_tf_model)
+    #parser.add_argument("--", default="./", help="")
+
+    args = parser.parse_args()
+    params = vars(args)
+
+    #toNPZ(path_to_data, vgg_tf_model)
+    toNPZ(params["visual_genome"], params["vg_images"], params["vg_data"], params["vgg_model"])

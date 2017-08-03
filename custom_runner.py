@@ -11,7 +11,7 @@ class CustomRunner(object):
     This class manages the the background threads needed to fill
         a queue full of data.
     """
-    def __init__(self, image_feat_dim, vocab_size, seq_len, batch_size, batch_path):
+    def __init__(self, image_feat_dim, vocab_size, seq_len, batch_size, batch_path, dataset_relations_only):
 
         self.image_feat_dim = image_feat_dim
         self.vocab_size = vocab_size
@@ -26,6 +26,8 @@ class CustomRunner(object):
         self.im_feats_placeholder = tf.placeholder(tf.float32, shape=[image_feat_dim[0], image_feat_dim[1]])
         self.triples_placeholder = tf.placeholder(tf.float32, shape=[seq_len, vocab_size])
         self.flag_placeholder = tf.placeholder(tf.float32, shape=[])
+
+        self.dataset_relations_only = dataset_relations_only
 
         min_after_dequeue = 0
         shapes = [[image_feat_dim[0], image_feat_dim[1]], [seq_len, vocab_size], []]
@@ -66,6 +68,16 @@ class CustomRunner(object):
             for j in range(trips.shape[0]):
                 yield im_feats[j], trips[j], flag[j]
 
+    def relationsOnlyDataGenerator(self):
+        big_arr = self.generateBigArr()
+        for i in range(0, big_arr.shape[0], 2):
+            rels = big_arr[i+1]
+            trips = self.oneHot(rels)
+            im_feats = np.tile(np.expand_dims(big_arr[i], axis=0), (max(atts.shape[0], rels.shape[0]), 1, 1))
+            flag = np.tile(self.relations_flag, trips.shape[0])
+            for j in range(trips.shape[0]):
+                yield im_feats[j], trips[j], flag[j]
+
 
     def get_inputs(self):
         """
@@ -81,7 +93,10 @@ class CustomRunner(object):
         #for i in range(self.num_epochs):
         while True:
             #TODO Support multiple enqueue threads?
-            generator = self.dataGenerator()
+            if self.dataset_relations_only:
+                generator = self.relationsOnlyDataGenerator()
+            else:
+                generator = self.dataGenerator()
             for im_batch, triples_batch, flag_batch in generator:
                 feed_dict = {self.im_feats_placeholder : im_batch,\
                              self.triples_placeholder : triples_batch,\

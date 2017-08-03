@@ -30,13 +30,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--visual_genome", default="./data/", help="The path to the visual genome data. Defaults to ./data")
-    parser.add_argument("--logs_dir", default="./models/vgg/vgg16.tfmodel", help="The path to the logs where files will be saved and TensorBoard summaries are written.")
+    parser.add_argument("--vgg_tf_model_name", default="vgg16.tfmodel", help="The name of the model.")
+    parser.add_argument("--vgg_tf_model_path", default="./models/vgg/", help="The path to where the vgg model will be saved.")
 
     args = parser.parse_args()
     params = vars(args)
 
     path_to_data = params["visual_genome"]
-    path_to_model = params["vgg_tf_model"]
+    path_to_model = os.path.join(params["vgg_tf_model_path"], params["vgg_tf_model_name"])
 
     #If the directory doesn't exist, create it
     if not os.path.exists(path_to_data):

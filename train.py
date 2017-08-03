@@ -18,7 +18,7 @@ from custom_runner import CustomRunner
 class SceneGraphWGAN(object):
     def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir,\
                  BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, max_iterations=50000, convergence_threshold=5e-5,\
-                 im_and_lang=False, resume=False):
+                 im_and_lang=False, resume=False, dataset_relations_only = False):
         #TODO Assert that im_and_lang isn't true if a language only discriminator/generator has been chosen
         self.batch_path = batch_path
         self.batch_path += "/" if self.batch_path[-1] != "/" else ""
@@ -41,6 +41,7 @@ class SceneGraphWGAN(object):
 
         self.im_and_lang = im_and_lang
         self.resume = resume
+        self.dataset_relations_only = dataset_relations_only
 
         if not os.path.exists(self.checkpoints_dir):
             os.makedirs(self.checkpoints_dir)
@@ -135,7 +136,7 @@ class SceneGraphWGAN(object):
     def constructOps(self):
         #Pin data ops to the cpu
         with tf.device("/cpu:0"):
-            self.custom_runner = CustomRunner(self.image_feat_dim, self.vocab_size, self.seq_len, self.BATCH_SIZE, self.batch_path)
+            self.custom_runner = CustomRunner(self.image_feat_dim, self.vocab_size, self.seq_len, self.BATCH_SIZE, self.batch_path, self.dataset_relations_only)
             #self.inputs = self.custom_runner.get_inputs()
             ims, triples, flags = self.custom_runner.get_inputs()
 
@@ -268,9 +269,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--visual_genome", default="./data/", help="The path to the visual genome data. Defaults to ./data")
+    parser.add_argument("--visual_genome_batches", default="./data/batches/", help="The path to the visual genome data. Defaults to ./data")
     parser.add_argument("--logs_dir", default="./logs/", help="The path to the logs where files will be saved and TensorBoard summaries are written.")
     parser.add_argument("--samples_dir", default="./samples/", help="The path to the samples dir where samples will be generated.")
-    parser.add_argument("--vocab", default="./preprocessing/vocab.json", help="Path to the vocabulary")
+    parser.add_argument("--vocab", default="./preprocessing/saved_data/vocab.json", help="Path to the vocabulary")
 
     parser.add_argument("--batch_size", default=128, help="Batch size defaults to 128", type=int)
     parser.add_argument("--critic_iters", default=10, help="Number of iterations to train the critic", type=int)
@@ -282,15 +284,12 @@ if __name__ == "__main__":
     parser.add_argument("--lambda", default=10, help="Lambda term which regularizes to be close to one lipschitz", type=int)
     parser.add_argument("--use_language", default=False, help="Determines whether the generator update is also based on a discriminator trained on language only", type=bool)
     parser.add_argument("--resume", default=False, help="Resume training from the last checkpoint for this configuration", type=bool)
+    parser.add_argument("--dataset_relations_only", default=False, help="When true, indicates that the data only contains relations, and will affect how data is read", type=bool)
 
     parser.add_argument("--GPU", default="0", help="Which GPU to use")
 
     args = parser.parse_args()
     params = vars(args)
-
-    #TODO: Need to change this such that the input visual genome path is the batch path
-    #this is in order to support multiple train/test splits
-    batch_path = os.path.join(params["visual_genome"], "batches")
 
     verbosity_dict = {"DEBUG" : 0, "INFO" : 1, "WARN" : 2, "ERROR" : 3}
 
@@ -302,7 +301,8 @@ if __name__ == "__main__":
     tf.reset_default_graph()
 
     #Begin training
-    wgan = SceneGraphWGAN(batch_path, params["vocab"], params["generator"], params["discriminator"], params["logs_dir"], params["samples_dir"], 
-           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"], im_and_lang=params["use_language"], resume=params["resume"])
+    wgan = SceneGraphWGAN(params["visual_genome_batches"], params["vocab"], params["generator"], params["discriminator"], params["logs_dir"], params["samples_dir"], 
+           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"], im_and_lang=params["use_language"], resume=params["resume"],
+           dataset_relations_only=params["dataset_relations_only"])
     #wgan.Train(params["epochs"], params["print_interval"])
     wgan.Train()
