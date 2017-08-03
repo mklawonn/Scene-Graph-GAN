@@ -6,6 +6,7 @@ import numpy as np
 import os
 import PIL.Image as Image
 import json
+import argparse
 from scipy.ndimage import filters
 from scipy.misc import imresize
 from itertools import izip_longest
