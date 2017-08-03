@@ -1,0 +1,11 @@
+usage: train.py [-h] [--visual_genome VISUAL_GENOME]
+                [--visual_genome_batches VISUAL_GENOME_BATCHES]
+                [--logs_dir LOGS_DIR] [--samples_dir SAMPLES_DIR]
+                [--vocab VOCAB] [--batch_size BATCH_SIZE]
+                [--critic_iters CRITIC_ITERS] [--generator GENERATOR]
+                [--discriminator DISCRIMINATOR] [--epochs EPOCHS]
+                [--print_interval PRINT_INTERVAL]
+                [--tf_verbosity TF_VERBOSITY] [--lambda LAMBDA]
+                [--use_language USE_LANGUAGE] [--resume RESUME]
+                [--dataset_relations_only DATASET_RELATIONS_ONLY] [--GPU GPU]
+train.py: error: unrecognized arguments: --vg_batches ./data/xu_et_al_batches/

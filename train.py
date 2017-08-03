@@ -269,7 +269,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--visual_genome", default="./data/", help="The path to the visual genome data. Defaults to ./data")
-    parser.add_argument("--visual_genome_batches", default="./data/batches/", help="The path to the visual genome data. Defaults to ./data")
+    parser.add_argument("--vg_batches", default="./data/batches/", help="The path to the visual genome data. Defaults to ./data")
     parser.add_argument("--logs_dir", default="./logs/", help="The path to the logs where files will be saved and TensorBoard summaries are written.")
     parser.add_argument("--samples_dir", default="./samples/", help="The path to the samples dir where samples will be generated.")
     parser.add_argument("--vocab", default="./preprocessing/saved_data/vocab.json", help="Path to the vocabulary")
@@ -301,7 +301,7 @@ if __name__ == "__main__":
     tf.reset_default_graph()
 
     #Begin training
-    wgan = SceneGraphWGAN(params["visual_genome_batches"], params["vocab"], params["generator"], params["discriminator"], params["logs_dir"], params["samples_dir"], 
+    wgan = SceneGraphWGAN(params["vg_batches"], params["vocab"], params["generator"], params["discriminator"], params["logs_dir"], params["samples_dir"], 
            BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"], im_and_lang=params["use_language"], resume=params["resume"],
            dataset_relations_only=params["dataset_relations_only"])
     #wgan.Train(params["epochs"], params["print_interval"])
