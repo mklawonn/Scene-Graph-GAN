@@ -1,4 +1,0 @@
-Traceback (most recent call last):
-  File "train.py", line 304, in <module>
-    wgan = SceneGraphWGAN(params["visual_genome_batches"], params["vocab"], params["generator"], params["discriminator"], params["logs_dir"], params["samples_dir"], 
-KeyError: 'visual_genome_batches'
