@@ -26,7 +26,7 @@ def downloadROIAndVocab(saved_data_path):
         for chunk in r.iter_content(chunk_size=1024):
             if chunk:
                 f.write(chunk)
-    predicate_link = "https://raw.githubusercontent.com/danfeiX/scene-graph-TF-release/master/data_tools/VG/predicate_list.txt"
+    """predicate_link = "https://raw.githubusercontent.com/danfeiX/scene-graph-TF-release/master/data_tools/VG/predicate_list.txt"
     r = requests.get(predicate_link, stream = True)
     with open(os.path.join(saved_data_path, "predicate_list.txt"), "wb") as f:
         for chunk in r.iter_content(chunk_size=1024):
@@ -37,31 +37,25 @@ def downloadROIAndVocab(saved_data_path):
     with open(os.path.join(saved_data_path, "object_list.txt"), "wb") as f:
         for chunk in r.iter_content(chunk_size=1024):
             if chunk:
+                f.write(chunk)"""
+    metadata = "http://cvgl.stanford.edu/scene-graph/dataset/VG-SGG-dicts.json"
+    r = requests.get(metadata, stream = True)
+    with open(os.path.join(saved_data_path, "VG-SGG-dicts.json"), "wb") as f:
+        for chunk in r.iter_content(chunk_size=1024):
+            if chunk:
                 f.write(chunk)
 
 def createVocabJson(saved_data_path):
     #Objects will have the same index as is present in the h5 file, relations will be the same + 150
-    object_f = os.path.join(saved_data_path, "object_list.txt")
-    predicate_f = os.path.join(saved_data_path, "predicate_list.txt")
+    in_file = os.path.join(saved_data_path, "VG-SGG-dicts.json")
     vocab_f = os.path.join(saved_data_path, "xu_et_al_vocab.json")
     vocab = {}
-    #Pretty sure their vocab is 1 indexed
-    #Determined this by running min([roi_h5['predicates'][i][0] for i in xrange(len(roi_h5['predicates']))])
-    index = 1
-    with open(object_f, "r") as f:
-        for line in f:
-            token = line.strip()
-            #The structure here is [index, num_times_appears_in_training_data]
-            #The second part of this list is irrelevant, just using to stay consistent with
-            #the other preprocessing script
-            vocab[token] = [index, 150]
-            index += 1
-    #Should start at index 151
-    with open(predicate_f, "r") as f:
-        for line in f:
-            token = line.strip()
-            vocab[token] = [index, 150]
-            index += 1
+    with open(in_file, "r") as f:
+        multiple_dicts = json.load(in_file)
+    for object in multiple_dicts["label_to_idx"]:
+        vocab[token] = int(multiple_dicts[token])
+    for predicate in multiple_dicts["predicate_to_idx"]:
+        vocab[token] = int(multiple_dicts[token]) + 150
     with open(vocab_f, "w") as f:
         json.dump(vocab, f)
 
@@ -234,9 +228,9 @@ def genAndSaveImFeats(path_to_images, tf_graph, image_means, batch_size, batch_p
 
     if eval:
         #Index 75651 is where the split 0 stops and split 1 starts
-        indices = list(range(75651, len(roi_h5['split'])))
+        indices = [i for i in list(range(75651, len(roi_h5['split']))) if roi_h5['img_to_first_rel'][i] != roi_h5['img_to_last_rel'][i]] ]
     else:
-        indices = list(range(0, 75651))
+        indices = [i for i in list(range(0, 75651)) if roi_h5['img_to_first_rel'][i] != roi_h5['img_to_last_rel'][i]] ]
 
     print "Creating image generator"
     im_generator = imageDataGenerator(path_to_images, imdb, roi_h5, indices, tf_graph, image_means, chunk_size = batch_size)
@@ -306,7 +300,7 @@ def toNPZ(params):
     genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], eval_path, eval = True)
 
     print "Generating image feats for training data"
-    genAndSaveImFeats(params["vg_images"], train_path, eval = False)
+    genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], train_path, eval = False)
 
     #IMPORTANT!!!! YOU HAVE TO DO THE EVAL PATH NORMALIZATION BEFORE THE TRAINING PATH
     #SINCE THE EVAL NORMALIZATION DEPENDS ON STATISTICS FROM THE TRAINING PATH
@@ -318,11 +312,11 @@ def toNPZ(params):
 
 
 def main(args, params):
-    #create_imdb(args)
+    create_imdb(args)
     #Download necessary stuff
-    #downloadROIAndVocab(params["saved_data"])
+    downloadROIAndVocab(params["saved_data"])
     #Create the vocabulary
-    #createVocabJson(params["saved_data"])
+    createVocabJson(params["saved_data"])
     #Convert the now constructed hdf5 dataset to our npz files
     toNPZ(params)
     #Remove their files

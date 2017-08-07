@@ -39,6 +39,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--visual_genome", default="./data/", help="The path to the visual genome data. Defaults to ./data")
+    parser.add_argument("--add_attributes", type=bool, default=False, help="Whether or not to add attributes to the scene graphs")
 
     args = parser.parse_args()
     params = vars(args)
@@ -58,4 +59,5 @@ if __name__ == "__main__":
             call(["mv", os.path.join(cwd, f), all_images])
         
     #Add attributes to scene graphs
-    addAttributes(path_to_data)
+    if params["add_attributes"]:
+        addAttributes(path_to_data)
