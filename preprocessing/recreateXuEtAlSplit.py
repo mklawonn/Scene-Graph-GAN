@@ -10,12 +10,19 @@ from subprocess import call
 
 from preprocessing.vg_to_imdb import main as create_imdb
 
+import tensorflow as tf
+import numpy as np
+import PIL.Image as Image
+from scipy.misc import imresize
+from itertools import izip_longest
+
+
 #Function to get the region of interest hdf5 file
 def downloadROIAndVocab(saved_data_path):
     #Use requests to get it
     link = "http://cvgl.stanford.edu/scene-graph/dataset/VG-SGG.h5"
     r = requests.get(link, stream = True)
-    with open("VGG-SGG.h5", 'wb') as f:
+    with open("VG-SGG.h5", 'wb') as f:
         for chunk in r.iter_content(chunk_size=1024):
             if chunk:
                 f.write(chunk)
@@ -169,13 +176,13 @@ def getRelations(index, imbd, roi_h5):
         subject = int(roi_h5['labels'][list_of_rels[j][0]])
         #Add 150 to the predicate's index to make it compatible with our restructured vocabulary,
         #which contains both objects and relations
-        predicate = int(roi_h5['predicates'][roi_h5['img_to_first_rel'][i] + j]) + 150
-        object = int(subject = roi_h5['labels'][list_of_rels[j][1]])
+        predicate = int(roi_h5['predicates'][roi_h5['img_to_first_rel'][index] + j]) + 150
+        object = int(roi_h5['labels'][list_of_rels[j][1]])
         triple = [subject, predicate, object]
         triples.append(triple)
     return triples
 
-def imageDataGenerator(path_to_images, roi_h5, indices, tf_graph, image_means,chunk_size = 128):
+def imageDataGenerator(path_to_images, imdb, roi_h5, indices, tf_graph, image_means, chunk_size = 128):
     #Iterate over chunk_sized groups of images, generating features and yielding them
     #along with the attributes and relationships of the image
     r_mean = image_means[0]
@@ -195,7 +202,9 @@ def imageDataGenerator(path_to_images, roi_h5, indices, tf_graph, image_means,ch
             if index == None:
                 break
             im_id = imdb['image_ids'][index]
-            im = Image.open(os.path.join(path_to_images, "{}.jpg".format(im_id)))
+            pre_im = Image.open(os.path.join(path_to_images, "{}.jpg".format(im_id)))
+            im = Image.new("RGB", pre_im.size)
+            im.paste(pre_im)
             im.load()
             im = imresize(im, (224, 224, 3))
             #Imresize casts back to uint8 for some reason
@@ -203,6 +212,7 @@ def imageDataGenerator(path_to_images, roi_h5, indices, tf_graph, image_means,ch
             ids.append(im_id)
             images.append(smoothAndNormalizeImg(im, r_mean, g_mean, b_mean))
             relations = getRelations(index, imdb, roi_h5)
+            relations_batch.append(relations)
         with tf.Session() as sess:
             init = tf.global_variables_initializer()
             sess.run(init)
@@ -308,11 +318,11 @@ def toNPZ(params):
 
 
 def main(args, params):
-    create_imdb(args)
+    #create_imdb(args)
     #Download necessary stuff
-    downloadROIAndVocab(params["saved_data"])
+    #downloadROIAndVocab(params["saved_data"])
     #Create the vocabulary
-    createVocabJson(params["saved_data"])
+    #createVocabJson(params["saved_data"])
     #Convert the now constructed hdf5 dataset to our npz files
     toNPZ(params)
     #Remove their files
@@ -327,7 +337,7 @@ if __name__ == "__main__":
     parser.add_argument("--visual_genome", default="./data/", help="The path to the visual genome data. Defaults to ./data")
     parser.add_argument("--vg_images", default="./data/all_images/", help="The path to the visual genome images. Defaults to ./data/all_images/")
     parser.add_argument("--vg_batches", default="./data/xu_et_al_batches/", help="The path where you want to save batches. For this script defaults to ./data/lu_et_al_batches")
-    parser.add_argument("--vgg_model", default="./models/vgg16.tfmodel", help="The path to the VGG tensorflow model definition")
+    parser.add_argument("--vgg_model", default="./models/vgg/vgg16.tfmodel", help="The path to the VGG tensorflow model definition")
     parser.add_argument("--batch_size", default=129, type=int, help="The batch size. Note that batch sizes above 128 have the potential to cause OOM errors")
     parser.add_argument("--saved_data", default="./preprocessing/saved_data/", help="The path to save various data for calculating image means, vocabularies, etc.")
 
