@@ -3,13 +3,14 @@ sys.path.append(os.getcwd())
 
 import json
 import argparse
+import gc
 
 from subprocess import call
 
 def unzipAll(save_path):
     for f in os.listdir(save_path):
         if f[-4:] == ".zip":
-            call(["unzip", os.path.join(save_path, f), "-d", save_path])
+            call(["unzip", "-q", os.path.join(save_path, f), "-d", save_path])
 
 def addAttributes(save_path):
     attr_data = json.load(open(os.path.join(save_path, 'attributes.json')))
@@ -51,7 +52,10 @@ if __name__ == "__main__":
     if not os.path.exists(all_images):
         os.makedirs(all_images)
     #Move all images to "all_images"
-    call(["mv", "{}VG_100K/*".format(path_to_data), all_images])
-    call(["mv", "{}VG_100K_2/*".format(path_to_data), all_images])
+    for directory in ["VG_100K", "VG_100K_2"]:
+        cwd = os.path.join(path_to_data, directory)
+        for f in os.listdir(cwd):
+            call(["mv", os.path.join(cwd, f), all_images])
+        
     #Add attributes to scene graphs
     addAttributes(path_to_data)

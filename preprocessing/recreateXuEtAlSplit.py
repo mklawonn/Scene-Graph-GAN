@@ -10,10 +10,8 @@ from subprocess import call
 
 from preprocessing.vg_to_imdb import main as create_imdb
 
-
-
 #Function to get the region of interest hdf5 file
-def downloadROIAndVocab():
+def downloadROIAndVocab(saved_data_path):
     #Use requests to get it
     link = "http://cvgl.stanford.edu/scene-graph/dataset/VG-SGG.h5"
     r = requests.get(link, stream = True)
@@ -23,22 +21,22 @@ def downloadROIAndVocab():
                 f.write(chunk)
     predicate_link = "https://raw.githubusercontent.com/danfeiX/scene-graph-TF-release/master/data_tools/VG/predicate_list.txt"
     r = requests.get(predicate_link, stream = True)
-    with open("./preprocessing/saved_data/predicate_list.txt", "wb") as f:
+    with open(os.path.join(saved_data_path, "predicate_list.txt"), "wb") as f:
         for chunk in r.iter_content(chunk_size=1024):
             if chunk:
                 f.write(chunk)
     object_link = "https://raw.githubusercontent.com/danfeiX/scene-graph-TF-release/master/data_tools/VG/object_list.txt"
     r = requests.get(object_link, stream = True)
-    with open("./preprocessing/saved_data/object_list.txt", "wb") as f:
+    with open(os.path.join(saved_data_path, "object_list.txt"), "wb") as f:
         for chunk in r.iter_content(chunk_size=1024):
             if chunk:
                 f.write(chunk)
 
-def createVocabJson():
+def createVocabJson(saved_data_path):
     #Objects will have the same index as is present in the h5 file, relations will be the same + 150
-    object_f = "./preprocessing/saved_data/object_list.txt"
-    predicate_f = "./preprocessing/saved_data/predicate_list.txt"
-    vocab_f = "./preprocessing/saved_data/xu_et_al_vocab.json"
+    object_f = os.path.join(saved_data_path, "object_list.txt")
+    predicate_f = os.path.join(saved_data_path, "predicate_list.txt")
+    vocab_f = os.path.join(saved_data_path, "xu_et_al_vocab.json")
     vocab = {}
     #Pretty sure their vocab is 1 indexed
     #Determined this by running min([roi_h5['predicates'][i][0] for i in xrange(len(roi_h5['predicates']))])
@@ -74,21 +72,20 @@ def grouper(iterable, n, fillvalue=None):
     args = [iter(iterable)] * n
     return izip_longest(*args, fillvalue=fillvalue)
 
-def computeImageMean(image_dir):
-    if os.path.exists("./preprocessing/saved_data/image_mean.txt"):
-        means = open("./preprocessing/saved_data/image_mean.txt", "r").read().strip().split()
+def computeImageMean(image_dir, saved_data_path):
+    if os.path.exists(os.path.join(saved_data_path, "image_mean.txt")):
+        means = open(os.path.join(saved_data_path, "image_mean.txt"), "r").read().strip().split()
         r_mean = float(means[0])
         g_mean = float(means[1])
         b_mean = float(means[2])
         return r_mean, g_mean, b_mean
-    image_dir += "/" if image_dir[-1] != "/" else ""
     num_images = 0
     r_total = g_total = b_total = 0.0
     r_mean = g_mean = b_mean = 0.0
     for image_file in os.listdir(image_dir):
         #img = cv2.imread(image_dir + image_file).astype(np.float32)
         try:
-            img = Image.open("{}{}".format(image_dir, image_file))
+            img = Image.open(os.path.join(image_dir, image_file))
             img.load()
             img = np.array(img)
         except:
@@ -108,7 +105,7 @@ def computeImageMean(image_dir):
     g_mean = g_total / float(num_images)
     b_mean = b_total / float(num_images)
 
-    with open("./preprocessing/saved_data/image_mean.txt", "w") as f:
+    with open(os.path.join(saved_data_path, "image_mean.txt"), "w") as f:
         f.write("{} {} {}".format(r_mean, g_mean, b_mean))
 
     return r_mean, g_mean, b_mean
@@ -281,7 +278,7 @@ def toNPZ(params):
 
     print "Computing Image Mean"
     #TODO Fix the data snooping (shouldn't matter too much)
-    r_mean, g_mean, b_mean = computeImageMean(params["vg_images"])
+    r_mean, g_mean, b_mean = computeImageMean(params["vg_images"], params["saved_data"])
     image_means = [r_mean, g_mean, b_mean]
     print "Done"
 
@@ -313,9 +310,9 @@ def toNPZ(params):
 def main(args, params):
     create_imdb(args)
     #Download necessary stuff
-    downloadROIAndVocab()
+    downloadROIAndVocab(params["saved_data"])
     #Create the vocabulary
-    createVocabJson()
+    createVocabJson(params["saved_data"])
     #Convert the now constructed hdf5 dataset to our npz files
     toNPZ(params)
     #Remove their files
@@ -332,6 +329,7 @@ if __name__ == "__main__":
     parser.add_argument("--vg_batches", default="./data/xu_et_al_batches/", help="The path where you want to save batches. For this script defaults to ./data/lu_et_al_batches")
     parser.add_argument("--vgg_model", default="./models/vgg16.tfmodel", help="The path to the VGG tensorflow model definition")
     parser.add_argument("--batch_size", default=129, type=int, help="The batch size. Note that batch sizes above 128 have the potential to cause OOM errors")
+    parser.add_argument("--saved_data", default="./preprocessing/saved_data/", help="The path to save various data for calculating image means, vocabularies, etc.")
 
     #These args are necessary for running their code
     parser.add_argument('--image_dir', default='./data/all_images')
@@ -342,6 +340,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     params = vars(args)
+
+    if not os.path.exists(params["saved_data"]):
+        os.makedirs(params["saved_data"])
 
     #Yeah I know this is stupid but I'm lazy
     main(args, params)

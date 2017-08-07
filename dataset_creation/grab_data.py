@@ -42,6 +42,10 @@ if __name__ == "__main__":
     #If the directory doesn't exist, create it
     if not os.path.exists(path_to_data):
         os.makedirs(path_to_data)
+
+    if not os.path.exists(params["vgg_tf_model_path"]):
+        os.makedirs(path_to_data)
+
     #Get the visual genome data and save it there
     getVisualGenome(path_to_data)
     #Get the VGG model and save it there
