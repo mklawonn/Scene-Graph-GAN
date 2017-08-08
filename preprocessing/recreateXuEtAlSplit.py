@@ -51,11 +51,11 @@ def createVocabJson(saved_data_path):
     vocab_f = os.path.join(saved_data_path, "xu_et_al_vocab.json")
     vocab = {}
     with open(in_file, "r") as f:
-        multiple_dicts = json.load(in_file)
+        multiple_dicts = json.load(f)
     for object in multiple_dicts["label_to_idx"]:
-        vocab[token] = int(multiple_dicts[token])
+        vocab[object] = int(multiple_dicts["label_to_idx"][object])
     for predicate in multiple_dicts["predicate_to_idx"]:
-        vocab[token] = int(multiple_dicts[token]) + 150
+        vocab[predicate] = int(multiple_dicts["predicate_to_idx"][predicate]) + 150
     with open(vocab_f, "w") as f:
         json.dump(vocab, f)
 
@@ -157,7 +157,7 @@ def normalizeFeatures(train_path, batch_dir):
             continue
         npz = np.load(os.path.join(batch_dir, f))
         big_arr = npz['arr_0']
-        for i in xrange(0, big_arr.shape[0], 3):
+        for i in xrange(0, big_arr.shape[0], 2):
             big_arr[i] -= mean
             big_arr[i] *= (1./std_dev)
         np.savez(os.path.join(batch_dir, f), big_arr)
@@ -228,9 +228,9 @@ def genAndSaveImFeats(path_to_images, tf_graph, image_means, batch_size, batch_p
 
     if eval:
         #Index 75651 is where the split 0 stops and split 1 starts
-        indices = [i for i in list(range(75651, len(roi_h5['split']))) if roi_h5['img_to_first_rel'][i] != roi_h5['img_to_last_rel'][i]] ]
+        indices = [i for i in list(range(75651, len(roi_h5['split']))) if roi_h5['img_to_first_rel'][i] != roi_h5['img_to_last_rel'][i]]
     else:
-        indices = [i for i in list(range(0, 75651)) if roi_h5['img_to_first_rel'][i] != roi_h5['img_to_last_rel'][i]] ]
+        indices = [i for i in list(range(0, 75651)) if roi_h5['img_to_first_rel'][i] != roi_h5['img_to_last_rel'][i]]
 
     print "Creating image generator"
     im_generator = imageDataGenerator(path_to_images, imdb, roi_h5, indices, tf_graph, image_means, chunk_size = batch_size)
@@ -270,7 +270,7 @@ def writeFilenameToFeatDict(eval_path):
         big_arr_index = 0
         for name in filenames:
             filename_to_feats[name.strip()] = big_arr[big_arr_index].tolist()
-            big_arr_index += 3
+            big_arr_index += 2
                 
     with open(path_to_dict, "w") as dict_file:
         json.dump(filename_to_feats, dict_file)
@@ -297,10 +297,10 @@ def toNPZ(params):
         os.makedirs(eval_path)
 
     print "Generating image feats for eval data"
-    genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], eval_path, eval = True)
+    #genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], eval_path, eval = True)
 
     print "Generating image feats for training data"
-    genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], train_path, eval = False)
+    #genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], train_path, eval = False)
 
     #IMPORTANT!!!! YOU HAVE TO DO THE EVAL PATH NORMALIZATION BEFORE THE TRAINING PATH
     #SINCE THE EVAL NORMALIZATION DEPENDS ON STATISTICS FROM THE TRAINING PATH
@@ -312,11 +312,11 @@ def toNPZ(params):
 
 
 def main(args, params):
-    create_imdb(args)
+    #create_imdb(args)
     #Download necessary stuff
-    downloadROIAndVocab(params["saved_data"])
+    #downloadROIAndVocab(params["saved_data"])
     #Create the vocabulary
-    createVocabJson(params["saved_data"])
+    #createVocabJson(params["saved_data"])
     #Convert the now constructed hdf5 dataset to our npz files
     toNPZ(params)
     #Remove their files
