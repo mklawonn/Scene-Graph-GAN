@@ -332,7 +332,7 @@ if __name__ == "__main__":
     parser.add_argument("--vg_images", default="./data/all_images/", help="The path to the visual genome images. Defaults to ./data/all_images/")
     parser.add_argument("--vg_batches", default="./data/xu_et_al_batches/", help="The path where you want to save batches. For this script defaults to ./data/lu_et_al_batches")
     parser.add_argument("--vgg_model", default="./models/vgg/vgg16.tfmodel", help="The path to the VGG tensorflow model definition")
-    parser.add_argument("--batch_size", default=129, type=int, help="The batch size. Note that batch sizes above 128 have the potential to cause OOM errors")
+    parser.add_argument("--batch_size", default=128, type=int, help="The batch size. Note that batch sizes above 128 have the potential to cause OOM errors")
     parser.add_argument("--saved_data", default="./preprocessing/saved_data/", help="The path to save various data for calculating image means, vocabularies, etc.")
 
     #These args are necessary for running their code
