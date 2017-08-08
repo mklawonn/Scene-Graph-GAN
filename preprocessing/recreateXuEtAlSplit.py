@@ -297,10 +297,10 @@ def toNPZ(params):
         os.makedirs(eval_path)
 
     print "Generating image feats for eval data"
-    #genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], eval_path, eval = True)
+    genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], eval_path, eval = True)
 
     print "Generating image feats for training data"
-    #genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], train_path, eval = False)
+    genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], train_path, eval = False)
 
     #IMPORTANT!!!! YOU HAVE TO DO THE EVAL PATH NORMALIZATION BEFORE THE TRAINING PATH
     #SINCE THE EVAL NORMALIZATION DEPENDS ON STATISTICS FROM THE TRAINING PATH
@@ -312,11 +312,11 @@ def toNPZ(params):
 
 
 def main(args, params):
-    #create_imdb(args)
+    create_imdb(args)
     #Download necessary stuff
-    #downloadROIAndVocab(params["saved_data"])
+    downloadROIAndVocab(params["saved_data"])
     #Create the vocabulary
-    #createVocabJson(params["saved_data"])
+    createVocabJson(params["saved_data"])
     #Convert the now constructed hdf5 dataset to our npz files
     toNPZ(params)
     #Remove their files
