@@ -1,36 +1,44 @@
+import os, sys
+sys.path.append(os.getcwd())
+
 import tensorflow as tf
 import numpy as np
+import argparse
+import json
+
+from PIL import Image
+from PIL import ImageFont
+from PIL import ImageDraw
+
+from train import SceneGraphWGAN
+
+#####################################################
+# Global Variables
+#####################################################
 
 def loadModel(params, sess):
     #Create WGAN instance
     wgan = SceneGraphWGAN(params["visual_genome"], params["vocab"], params["generator"], params["discriminator"], params["logs_dir"], params["samples_dir"], 
-           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"], im_and_lang=params["use_language"], resume=False)
+           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"], im_and_lang=params["use_language"], validation = True, resume=False)
     wgan.constructOps()
     wgan.loadModel(sess)
-    return tf.get_default_graph().as_graph_def()
+    queue_var_name = wgan.queue_var_name
+    #return tf.get_default_graph().as_graph_def()
+    tf.train.start_queue_runners(sess=sess)
+    wgan.custom_runner.start_threads(sess)
+    return wgan
 
-def generatePredictions(image_features, graph_def, sess, relations_only = True):
-    #Enqueue image features
+def generatePredictions(wgan, sess):
     #Initialize the queue variables
-    dummy_triples = np.zeros((image_features.shape[0], 3, vocab_size), dtype=np.float32)
-    if relations_only:
-        feed_dict = {im_feats_placeholder : image_features, triples_placeholder : dummy_triples, flag_placeholder : relations_flag}
-        #Generate a whole bunch of triples
-        #TODO: If the Add_14 tensor gets renamed make sure to change it here
-        triples_tensor = graph_def.get_tensor_by_name("Generator_1/generator_output:0")
-        scores_tensor = graph_def.get_tensor_by_name("Discriminator_2/Add_14:0")
-        
-        sub_att_vector = graph_def.get_tensor_by_name("Generator_1/attention_softmax:0")
-        pred_att_vector = graph_def.get_tensor_by_name("Generator_1/attention_softmax_1:0")
-        obj_att_vector = graph_def.get_tensor_by_name("Generator_1/attention_softmax_2:0")
+    queue_vars = [v for v in tf.global_variables() if queue_var_name in v.name]
+    queue_init_op = tf.variables_initializer(queue_vars)
+    sess.run(queue_init_op)
 
-        triples, scores, sub_att, pred_att, obj_att = sess.run([triples_tensor, scores_tensor, sub_att_vector, pred_att_vector, obj_att_vector], feed_dict=feed_dict)
-    else:
-        pass
+    gen_output, disc_cost, subject_att, predicate_att, object_att = sess.run([wgan.fake_inputs, wgan.disc_cost, wgan.g.attention_vectors[0], wgan.g.attention_vectors[1], wgan.g.attention_vectors[2]])
     #Stitch together using attention
     #Make sure to rename objects that are the same name but different according to the attention
     #Return the argmaxed triples
-    return np.argmax(triples, axis=2), np.mean(scores, axis=1)
+    return np.argmax(gen_output, axis=2), np.mean(disc_cost, axis=1)
 
 def loadAllValidationImages(path_to_val_batches):
     filenames = [os.path.join(path_to_val_batches, f) for f in os.listdir(path_to_val_batches) if f[-4:] == ".npz"]
@@ -71,31 +79,31 @@ def decodeSamples(samples, decoder):
 #is set aside. The extracted features will need to be mapped to the images they came
 #from somehow. Need to figure out how to put real captions beside the generated ones. 
 #Also potentially visualize attention here.
-def generateSamples(params, session, graph_def):
+def generateSamples(params, session, wgan):
 
-    path_to_val_batches = params["visual_genome"]
-    path_to_dict = os.path.join(path_to_val_batches, "filename_to_feats_dict.json")
+    path_to_val_batches = os.path.join(params["visual_genome"], "eval")
+    #path_to_dict = os.path.join(path_to_val_batches, "filename_to_feats_dict.json")
     path_to_batch_0_filenames = os.path.join(path_to_val_batches, 'filenames.txt')
 
-    with open(path_to_dict, 'r') as f:
-        filename_to_feats = json.load(f)
+    #with open(path_to_dict, 'r') as f:
+    #    filename_to_feats = json.load(f)
     with open(path_to_batch_0_filenames, 'r') as f:
         filenames = [line.strip() for line in f]
-    with open(path_to_vocab, 'r') as f:
-        vocab = json.load(f)
 
-    samples_dir = os.path.join(samples_dir, iteration)
     if not os.path.exists(samples_dir):
         os.makedirs(samples_dir)
 
-    batch = 19
+    samples_dir = wgan.samples_dir
+
+    batch = params["batch_size"]
     count = 0
 
     decoder = {y[1]:x for x, y in vocab.iteritems()}
 
     for f in filenames:
         im_feats = np.array([filename_to_feats[f]]*batch)
-        samples = generatePredictions(im_feats, graph_def, session, relations_only = True)
+        #TODO Check in params if relations only is true
+        samples, scores = generatePredictions(im_feats, graph_def, session, relations_only = True)
         samples = decodeSamples(samples, decoder)
         drawSamples(params, session, f, count, triples)
         count += 1
@@ -136,6 +144,5 @@ if __name__ == "__main__":
     tf.reset_default_graph()
 
     with tf.Session() as sess:
-        model_def = loadModel(sess, params)
-        generateSamples(params, session, graph_def):
-        
+        wgan = loadModel(params, sess)
+        generateSamples(wgan, sess)

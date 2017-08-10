@@ -11,7 +11,7 @@ class CustomRunner(object):
     This class manages the the background threads needed to fill
         a queue full of data.
     """
-    def __init__(self, image_feat_dim, vocab_size, seq_len, batch_size, batch_path, dataset_relations_only):
+    def __init__(self, image_feat_dim, vocab_size, seq_len, batch_size, batch_path, dataset_relations_only, validation=False):
 
         self.image_feat_dim = image_feat_dim
         self.vocab_size = vocab_size
@@ -31,7 +31,12 @@ class CustomRunner(object):
 
         min_after_dequeue = 0
         shapes = [[image_feat_dim[0], image_feat_dim[1]], [seq_len, vocab_size], []]
-        self.queue = tf.RandomShuffleQueue(queue_capacity, min_after_dequeue, dtypes=[tf.float32, tf.float32, tf.float32], shapes=shapes)
+
+        if validation:
+            self.queue = tf.RandomShuffleQueue(queue_capacity, min_after_dequeue, dtypes=[tf.float32, tf.float32, tf.float32], shapes=shapes)
+        else:
+            self.queue = tf.FIFOQueue(queue_capacity, min_after_dequeue, dtypes=[tf.float32, tf.float32, tf.float32], shapes=shapes)
+
         self.queue_size_op = self.queue.size()
         self.enqueue_op = self.queue.enqueue([self.im_feats_placeholder, self.triples_placeholder, self.flag_placeholder])
 
@@ -73,11 +78,31 @@ class CustomRunner(object):
         for i in range(0, big_arr.shape[0], 2):
             rels = big_arr[i+1]
             trips = self.oneHot(rels)
-            im_feats = np.tile(np.expand_dims(big_arr[i], axis=0), (max(atts.shape[0], rels.shape[0]), 1, 1))
+            im_feats = np.tile(np.expand_dims(big_arr[i], axis=0), (rels.shape[0], 1, 1))
             flag = np.tile(self.relations_flag, trips.shape[0])
             for j in range(trips.shape[0]):
                 yield im_feats[j], trips[j], flag[j]
 
+    #TODO Support attributes as well
+    def validationGenerator(self):
+        path_to_val_batches = os.path.join(self.batch_path, "eval")
+        #filenames = [os.path.join(path_to_val_batches, f) for f in os.listdir(path_to_val_batches) if f[-4:] == ".npz"]
+        filenames = [os.path.join(path_to_val_batches, "batch_0.npz")]
+        big_arr_list = []
+        for f in range(len(filenames)):
+            npz = np.load(filenames[f])
+            big_arr_list.append(npz['arr_0'])
+        big_arr = np.concatenate(big_arr_list, axis=0)
+        for in range(0, big_arr.shape[0], 2):
+            #rels = big_arr[i+1]
+            #Create some dummy relations in order to generate batch_size per image relations
+            #This way each dequeue op will yield exactly batch_size copies of the same image feats
+            rels = np.ones((self.batch_size, 3))
+            trips = self.oneHot(rels)
+            im_feats = np.tile(np.expand_dims(big_arr[i], axis=0), (rels.shape[0], 1, 1))
+            flag = np.tile(self.relations_flag, trips.shape[0])
+            for j in range(trips.shape[0]):
+                yield im_feats[j], trips[j], flag[j]
 
     def get_inputs(self):
         """
@@ -93,6 +118,8 @@ class CustomRunner(object):
         #for i in range(self.num_epochs):
         while True:
             #TODO Support multiple enqueue threads?
+            if self.validation:
+                generator = self.validationGenerator()
             if self.dataset_relations_only:
                 generator = self.relationsOnlyDataGenerator()
             else:

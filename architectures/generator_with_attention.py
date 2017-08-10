@@ -14,6 +14,8 @@ class Generator(object):
         self.soft_gumbel_temp = 0.9
         self.flag_shape = 512
 
+        self.attention_vectors = []
+
         xavier_initializer = tf.contrib.layers.xavier_initializer()
         constant_initializer = tf.constant_initializer(0.05)
         alpha_initializer = tf.constant_initializer(1)
@@ -143,6 +145,7 @@ class Generator(object):
             #e = tf.add(tf.matmul(context_hidden_state_and_noise, self.att_W), self.att_b)
             e = tf.add(tf.matmul(context_hidden_state, self.att_W), self.att_b)
             alpha = tf.nn.softmax(e, name="attention_softmax")
+            self.attention_vectors.append(alpha)
             z_hat = tf.reduce_sum(tf.multiply(context, tf.expand_dims(alpha, 2)), axis = 1) #Output is [batch size, D]
             #Concatenate \hat{z}_t , h_{t-1}, and the embedding of the previous word 
             #Also now trying to add in the noise here as opposed to in the attention model

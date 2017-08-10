@@ -18,7 +18,7 @@ from custom_runner import CustomRunner
 class SceneGraphWGAN(object):
     def __init__(self, batch_path, path_to_vocab_json, generator, discriminator, logs_dir, samples_dir,\
                  BATCH_SIZE=64, CRITIC_ITERS=10, LAMBDA=10, max_iterations=50000, convergence_threshold=5e-5,\
-                 im_and_lang=False, resume=False, dataset_relations_only = False):
+                 im_and_lang=False, resume=False, dataset_relations_only = False, validation = False):
         #TODO Assert that im_and_lang isn't true if a language only discriminator/generator has been chosen
         self.batch_path = batch_path
         self.batch_path += "/" if self.batch_path[-1] != "/" else ""
@@ -42,6 +42,7 @@ class SceneGraphWGAN(object):
         self.im_and_lang = im_and_lang
         self.resume = resume
         self.dataset_relations_only = dataset_relations_only
+        self.validation = validation
 
         if not os.path.exists(self.checkpoints_dir):
             os.makedirs(self.checkpoints_dir)
@@ -70,8 +71,6 @@ class SceneGraphWGAN(object):
         with open(path_to_vocab_json, "r") as f:
             self.vocab = json.load(f)
         self.vocab_size = len(self.vocab)
-        #self.decoder = {y[0]:x for x, y in self.vocab.iteritems()}
-        self.decoder = {y:x for x, y in self.vocab.iteritems()}
         self.seq_len = 3
 
         #Image feature dimensionality
@@ -137,7 +136,7 @@ class SceneGraphWGAN(object):
     def constructOps(self):
         #Pin data ops to the cpu
         with tf.device("/cpu:0"):
-            self.custom_runner = CustomRunner(self.image_feat_dim, self.vocab_size, self.seq_len, self.BATCH_SIZE, self.batch_path, self.dataset_relations_only)
+            self.custom_runner = CustomRunner(self.image_feat_dim, self.vocab_size, self.seq_len, self.BATCH_SIZE, self.batch_path, self.dataset_relations_only, self.validation)
             #self.inputs = self.custom_runner.get_inputs()
             ims, triples, flags = self.custom_runner.get_inputs()
 
@@ -275,7 +274,7 @@ if __name__ == "__main__":
     parser.add_argument("--samples_dir", default="./samples/", help="The path to the samples dir where samples will be generated.")
     parser.add_argument("--vocab", default="./preprocessing/saved_data/vocab.json", help="Path to the vocabulary")
 
-    parser.add_argument("--batch_size", default=128, help="Batch size defaults to 128", type=int)
+    parser.add_argument("--batch_size", default=256, help="Batch size defaults to 128", type=int)
     parser.add_argument("--critic_iters", default=10, help="Number of iterations to train the critic", type=int)
     parser.add_argument("--generator", default="lstm", help="Generator defaults to LSTM with attention. See the architectures folder.")
     parser.add_argument("--discriminator", default="lstm", help="Discriminator defaults to LSTM with attention. See the architectures folder.")
