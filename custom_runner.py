@@ -33,9 +33,9 @@ class CustomRunner(object):
         shapes = [[image_feat_dim[0], image_feat_dim[1]], [seq_len, vocab_size], []]
 
         if validation:
-            self.queue = tf.RandomShuffleQueue(queue_capacity, min_after_dequeue, dtypes=[tf.float32, tf.float32, tf.float32], shapes=shapes)
+            self.queue = tf.FIFOQueue(queue_capacity, dtypes=[tf.float32, tf.float32, tf.float32], shapes=shapes)
         else:
-            self.queue = tf.FIFOQueue(queue_capacity, min_after_dequeue, dtypes=[tf.float32, tf.float32, tf.float32], shapes=shapes)
+            self.queue = tf.RandomShuffleQueue(queue_capacity, min_after_dequeue, dtypes=[tf.float32, tf.float32, tf.float32], shapes=shapes)
 
         self.queue_size_op = self.queue.size()
         self.enqueue_op = self.queue.enqueue([self.im_feats_placeholder, self.triples_placeholder, self.flag_placeholder])
@@ -93,7 +93,7 @@ class CustomRunner(object):
             npz = np.load(filenames[f])
             big_arr_list.append(npz['arr_0'])
         big_arr = np.concatenate(big_arr_list, axis=0)
-        for in range(0, big_arr.shape[0], 2):
+        for i in range(0, big_arr.shape[0], 2):
             #rels = big_arr[i+1]
             #Create some dummy relations in order to generate batch_size per image relations
             #This way each dequeue op will yield exactly batch_size copies of the same image feats
@@ -133,6 +133,7 @@ class CustomRunner(object):
 
     def start_threads(self, sess, n_threads=1):
         """ Start background threads to feed queue """
+        print "HELLO", os.environ["CUDA_VISIBLE_DEVICES"]
         threads = []
         for n in range(n_threads):
             t = threading.Thread(target=self.thread_main, args=(sess,))

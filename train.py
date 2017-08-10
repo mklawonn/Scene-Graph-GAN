@@ -293,9 +293,9 @@ if __name__ == "__main__":
 
     verbosity_dict = {"DEBUG" : 0, "INFO" : 1, "WARN" : 2, "ERROR" : 3}
 
-    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '{}'.format(verbosity_dict[params["tf_verbosity"]])
-    os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
-    os.environ['CUDA_VISIBLE_DEVICES'] = params["GPU"]
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = '{}'.format(verbosity_dict[params["tf_verbosity"]])
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "{}".format(params["GPU"])
 
     #Call this just in case the graph is persisting due to TF closing suddenly
     tf.reset_default_graph()

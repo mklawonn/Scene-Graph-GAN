@@ -56,6 +56,7 @@ def createVocabJson(saved_data_path):
         vocab[object] = int(multiple_dicts["label_to_idx"][object])
     for predicate in multiple_dicts["predicate_to_idx"]:
         vocab[predicate] = int(multiple_dicts["predicate_to_idx"][predicate]) + 150
+    vocab["unknown"] = 0
     with open(vocab_f, "w") as f:
         json.dump(vocab, f)
 
