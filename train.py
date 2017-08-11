@@ -26,10 +26,15 @@ class SceneGraphWGAN(object):
         self.path_to_vocab_json += "/" if self.path_to_vocab_json != "/" else ""
         self.discriminator = discriminator
         self.generator = generator
+        with_lang_str = ""
+        relations_only_str = ""
+        
         if im_and_lang:
-            self.configuration = "{}_gen_{}_disc_with_lang".format(generator, discriminator)
-        else:
-            self.configuration = "{}_gen_{}_disc".format(generator, discriminator)
+            with_lang_str = "_with_lang"
+        if dataset_relations_only:
+            relations_only_str = "_only_relations"
+
+        self.configuration = "{}_gen_{}_disc{}{}".format(generator, discriminator, with_lang_str, relations_only_str)
         self.logs_dir = os.path.join(logs_dir, self.configuration)
         self.checkpoints_dir = os.path.join(self.logs_dir, "checkpoints/")
         self.summaries_dir = os.path.join(self.logs_dir, "summaries/")
@@ -146,15 +151,16 @@ class SceneGraphWGAN(object):
             self.constant_flags = tf.get_variable("{}_flags".format(self.queue_var_name), initializer=flags, trainable=False)
             self.disc_step = tf.get_variable("{}_disc_step".format(self.queue_var_name), shape=[], initializer=tf.constant_initializer(0), trainable=False)
 
-        self.disc_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
-        #self.gen_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
-
         self.global_step = tf.get_variable("global_step", shape=[], initializer=tf.constant_initializer(0), trainable=False)
 
-        #disc_optimizer_decay = tf.train.exponential_decay(1e-2, self.disc_step, 10, .95, staircase=True)
-        gen_optimizer_decay = tf.train.exponential_decay(1e-3, self.global_step, 10000, .9, staircase=True)
-        #self.disc_optimizer = tf.train.GradientDescentOptimizer(disc_optimizer_decay)
-        self.gen_optimizer = tf.train.GradientDescentOptimizer(gen_optimizer_decay)
+        self.disc_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
+        if self.dataset_relations_only:
+            self.gen_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
+        else:
+            #disc_optimizer_decay = tf.train.exponential_decay(1e-2, self.disc_step, 10, .95, staircase=True)
+            gen_optimizer_decay = tf.train.exponential_decay(1e-3, self.global_step, 10000, .9, staircase=True)
+            #self.disc_optimizer = tf.train.GradientDescentOptimizer(disc_optimizer_decay)
+            self.gen_optimizer = tf.train.GradientDescentOptimizer(gen_optimizer_decay)
 
         self.fake_inputs = self.Generator(self.constant_ims, self.BATCH_SIZE, self.constant_flags)
 

@@ -28,6 +28,7 @@ class CustomRunner(object):
         self.flag_placeholder = tf.placeholder(tf.float32, shape=[])
 
         self.dataset_relations_only = dataset_relations_only
+        self.validation = validation
 
         min_after_dequeue = 0
         shapes = [[image_feat_dim[0], image_feat_dim[1]], [seq_len, vocab_size], []]
@@ -133,7 +134,6 @@ class CustomRunner(object):
 
     def start_threads(self, sess, n_threads=1):
         """ Start background threads to feed queue """
-        print "HELLO", os.environ["CUDA_VISIBLE_DEVICES"]
         threads = []
         for n in range(n_threads):
             t = threading.Thread(target=self.thread_main, args=(sess,))
