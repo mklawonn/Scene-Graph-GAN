@@ -18,11 +18,11 @@ from itertools import izip_longest
 
 
 #Function to get the region of interest hdf5 file
-def downloadROIAndVocab(saved_data_path):
+def downloadROIAndVocab(saved_data_path, temp_path):
     #Use requests to get it
     link = "http://cvgl.stanford.edu/scene-graph/dataset/VG-SGG.h5"
     r = requests.get(link, stream = True)
-    with open("VG-SGG.h5", 'wb') as f:
+    with open(os.path.join(temp_path, "VG-SGG.h5"), 'wb') as f:
         for chunk in r.iter_content(chunk_size=1024):
             if chunk:
                 f.write(chunk)
@@ -222,10 +222,10 @@ def imageDataGenerator(path_to_images, imdb, roi_h5, indices, tf_graph, image_me
         yield feats, ids, relations_batch
 
 
-def genAndSaveImFeats(path_to_images, tf_graph, image_means, batch_size, batch_path, eval = False):
+def genAndSaveImFeats(path_to_images, tf_graph, image_means, batch_size, batch_path, temp_path, eval = False):
     #Create the database objects
-    imdb = h5py.File("imdb_1024.h5", 'r')
-    roi_h5 = h5py.File("VG-SGG.h5", 'r')
+    imdb = h5py.File(os.path.join(temp_path, "imdb_1024.h5"), 'r')
+    roi_h5 = h5py.File(os.path.join(temp_path, "VG-SGG.h5"), 'r')
 
     if eval:
         #Index 75651 is where the split 0 stops and split 1 starts
@@ -298,10 +298,10 @@ def toNPZ(params):
         os.makedirs(eval_path)
 
     print "Generating image feats for eval data"
-    genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], eval_path, eval = True)
+    genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], eval_path, temp_path, eval = True)
 
     print "Generating image feats for training data"
-    genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], train_path, eval = False)
+    genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], train_path, temp_path, eval = False)
 
     #IMPORTANT!!!! YOU HAVE TO DO THE EVAL PATH NORMALIZATION BEFORE THE TRAINING PATH
     #SINCE THE EVAL NORMALIZATION DEPENDS ON STATISTICS FROM THE TRAINING PATH
@@ -315,14 +315,14 @@ def toNPZ(params):
 def main(args, params):
     create_imdb(args)
     #Download necessary stuff
-    downloadROIAndVocab(params["saved_data"])
+    downloadROIAndVocab(params["saved_data"], params["temp_directory"])
     #Create the vocabulary
     createVocabJson(params["saved_data"])
     #Convert the now constructed hdf5 dataset to our npz files
     toNPZ(params)
     #Remove their files
-    call(["rm", "imdb_1024.h5"])
-    call(["rm", "VG-SGG.h5"])
+    call(["rm", os.path.join(params["temp_directory"], "imdb_1024.h5")])
+    call(["rm", os.path.join(params["temp_directory"], "VG-SGG.h5")])
     
 
 
@@ -335,6 +335,7 @@ if __name__ == "__main__":
     parser.add_argument("--vgg_model", default="./models/vgg/vgg16.tfmodel", help="The path to the VGG tensorflow model definition")
     parser.add_argument("--batch_size", default=128, type=int, help="The batch size. Note that batch sizes above 128 have the potential to cause OOM errors")
     parser.add_argument("--saved_data", default="./preprocessing/saved_data/", help="The path to save various data for calculating image means, vocabularies, etc.")
+    parser.add_argument("--temp_path", default="./", help="Where to write temporary files that will exceed 320GB.")
 
     #These args are necessary for running their code
     parser.add_argument('--image_dir', default='./data/all_images')
