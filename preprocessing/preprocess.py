@@ -7,6 +7,10 @@ import os
 import PIL.Image as Image
 import json
 import argparse
+import operator
+import random
+random.seed(1234)
+
 from scipy.ndimage import filters
 from scipy.misc import imresize
 from itertools import izip_longest
@@ -103,12 +107,18 @@ def buildVocab(sg_dict):
         with open("./preprocessing/saved_data/vocab.json", "r") as f:
             vocab = json.load(f)
         return vocab
+
+    objects = {}
+    relations = {}
+    attributes = {}
+
+
     vocab = {}
     #For a given key in the vocab, their is a corresponding list. The first element is the "index" of that key, i.e the integer representation
     #of that word, while the second element is the count of that word, or the number of times it appears in the training data
     #The 150 is me randomly picking a number I think will be bigger than any threshold I use
     #to reduce vocabulary size, guaranteeing that "be.v.01" is still in the vocabulary
-    vocab[u"be.v.01"] = [0, 150]
+    #vocab[u"be.v.01"] = [0, 150]
     """with open(os.path.join(path_to_data, 'scene_graphs.json')) as f:
         sg_dict = {sg['image_id']:sg for sg in json.load(f)}"""
 
@@ -117,22 +127,28 @@ def buildVocab(sg_dict):
             if "synsets" in o:
                 if len(o["synsets"]) > 0:
                     wordnet_synset = o["synsets"][0].lower().strip()
-                    if not wordnet_synset in vocab:
-                        vocab[wordnet_synset] = [0,0]
-                        vocab[wordnet_synset][0] = len(vocab)
-                        vocab[wordnet_synset][1] = 1
+                    #if not wordnet_synsets in vocab:
+                    if not wordnet_synset in objects:
+                        #vocab[wordnet_synset] = [0,0]
+                        #vocab[wordnet_synset][0] = len(vocab)
+                        #vocab[wordnet_synset][1] = 1
+                        objects[wordnet_synset] = 1
                     else:
-                        vocab[wordnet_synset][1] += 1
+                        #vocab[wordnet_synset][1] += 1
+                        objects[wordnet_synset] += 1
 
             if "attributes" in o:
                 for attribute in o["attributes"]:
                     if len(attribute.split()) == 1:
-                        if not attribute.lower().strip() in vocab:
-                            vocab[attribute.lower().strip()] = [0,0]
-                            vocab[attribute.lower().strip()][0] = len(vocab)
-                            vocab[attribute.lower().strip()][1] = 1
+                        #if not attribute.lower().strip() in vocab:
+                        if not attribute.lower().strip() in attributes:
+                            #vocab[attribute.lower().strip()] = [0,0]
+                            #vocab[attribute.lower().strip()][0] = len(vocab)
+                            #vocab[attribute.lower().strip()][1] = 1
+                            attributes[attribute.lower().strip()] = 1
                         else:
-                            vocab[attribute.lower().strip()][1] += 1
+                            #vocab[attribute.lower().strip()][1] += 1
+                            attributes[attribute.lower().strip()] += 1
 
         for r in sg_dict[i]["relationships"]:
             predicate = ""
@@ -140,34 +156,44 @@ def buildVocab(sg_dict):
                 if len(r["synsets"]) > 0:
                     predicate = r["synsets"][0].lower().strip()
             if len(predicate) > 0:
-                if not predicate in vocab:
-                    vocab[predicate] = [0,0]
-                    vocab[predicate][0] = len(vocab)
-                    vocab[predicate][1] += 1
+                #if not predicate in vocab:
+                if not predicate in relations:
+                    #vocab[predicate] = [0,0]
+                    #vocab[predicate][0] = len(vocab)
+                    #vocab[predicate][1] += 1
+                    relations[predicate] = 1
                 else:
-                    vocab[predicate][1] += 1
+                    #vocab[predicate][1] += 1
+                    relations[predicate] += 1
             #The subject and object should both already be added
             #via the objects loop above
 
-    with open(".preprocessing/saved_data/vocab.json", "w") as f:
+    top_n = 300
+    
+    #Prune the objects, relations, and attributes
+    objects = [i[0] for i in objects.items() if i in sorted(objects.items(), key=operator.itemgetter(1), reverse=True)[:top_n]]
+    relations = [i[0] for i in relations.items() if i in sorted(relations.items(), key=operator.itemgetter(1), reverse=True)[:(top_n/3)]]
+    attributes = [i[0] for i in attributes.items() if i in sorted(attributes.items(), key=operator.itemgetter(1), reverse=True)[:top_n]]
+
+    #Concatenate the objects relations and attributes into one vocab
+    #We know that be will already be in there
+    #vocab[u"be.v.01"] = 0
+    count = 0
+    for i in objects:
+        vocab[i] = count
+        count += 1
+    for i in relations:
+        vocab[i] = count
+        count += 1
+    for i in attributes:
+        vocab[i] = count
+        count += 1
+
+    #Save that vocab
+    with open("./preprocessing/saved_data/vocab.json", "w") as f:
         json.dump(vocab, f)
 
     return vocab
-
-def pruneVocab(vocab, threshold=10):
-    for k,v  in vocab.items():
-        if v[1] < threshold:
-            del vocab[k]
-    with open("./preprocessing/saved_data/vocab.json", "w") as f:
-        json.dump(vocab, f)
-
-def reIndexVocab(vocab):
-    i = 0
-    for item in vocab:
-        vocab[item][0] = i
-        i += 1
-    with open("./preprocessing/saved_data/vocab.json", "w") as f:
-        json.dump(vocab, f)
 
 #For a single scene graph, return the attribute and relationship triples
 def parseSceneGraph(sg, vocab, count_threshold=10):
@@ -200,9 +226,9 @@ def parseSceneGraph(sg, vocab, count_threshold=10):
 def encodeTriple(vocab, subject, predicate, object):
     #This is a dense representation of the sequence 
     dense = [0,0,0]
-    dense[0] = vocab[subject][0]
-    dense[1] = vocab[predicate][0]
-    dense[2] = vocab[object][0]
+    dense[0] = vocab[subject]
+    dense[1] = vocab[predicate]
+    dense[2] = vocab[object]
     return dense
 
 def grouper(iterable, n, fillvalue=None):
@@ -367,11 +393,6 @@ def toNPZ(path_to_data, path_to_images, out_path, vgg_tf_model):
     vocab = buildVocab(sg_dict)
     print "Done"
 
-    print "Pruning vocabulary"
-    pruneVocab(vocab)
-    reIndexVocab(vocab)
-    print "Done"
-
     print "Size of vocabulary after pruning"
     print len(vocab)
 
@@ -399,8 +420,8 @@ def toNPZ(path_to_data, path_to_images, out_path, vgg_tf_model):
             json.dump(image_files, f)
 
     print "Splitting into training and eval"
-    training_files = dict(image_files.items()[len(image_files)/10:])
-    eval_files = dict(image_files.items()[:len(image_files)/10])
+    training_files = dict(random.sample(image_files.items(), int(0.7*len(image_files.items()))))
+    eval_files = {x:y for x, y in image_files.iteritems() if x not in training_files}
 
     #Sanity check
     assert len(training_files) > len(eval_files)

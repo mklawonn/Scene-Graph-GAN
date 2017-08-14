@@ -315,14 +315,14 @@ def toNPZ(params):
 def main(args, params):
     create_imdb(args)
     #Download necessary stuff
-    downloadROIAndVocab(params["saved_data"], params["temp_directory"])
+    downloadROIAndVocab(params["saved_data"], params["temp_path"])
     #Create the vocabulary
     createVocabJson(params["saved_data"])
     #Convert the now constructed hdf5 dataset to our npz files
     toNPZ(params)
     #Remove their files
-    call(["rm", os.path.join(params["temp_directory"], "imdb_1024.h5")])
-    call(["rm", os.path.join(params["temp_directory"], "VG-SGG.h5")])
+    call(["rm", os.path.join(params["temp_path"], "imdb_1024.h5")])
+    call(["rm", os.path.join(params["temp_path"], "VG-SGG.h5")])
     
 
 

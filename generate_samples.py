@@ -18,8 +18,9 @@ from train import SceneGraphWGAN
 
 def loadModel(params, sess):
     #Create WGAN instance
-    wgan = SceneGraphWGAN(params["visual_genome"], params["vocab"], params["generator"], params["discriminator"], params["logs_dir"], params["samples_dir"], 
-           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"], im_and_lang=params["use_language"], validation = True, resume=False)
+    wgan = SceneGraphWGAN(params["vg_batches"], params["vocab"], params["generator"], params["discriminator"], params["logs_dir"], params["samples_dir"], 
+           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"], im_and_lang=params["use_language"],
+           validation = True, resume=False, dataset_relations_only = params["dataset_relations_only"])
     wgan.constructOps()
     wgan.loadModel(sess)
     queue_var_name = wgan.queue_var_name
@@ -30,7 +31,7 @@ def loadModel(params, sess):
 
 def generatePredictions(wgan, sess):
     #Initialize the queue variables
-    queue_vars = [v for v in tf.global_variables() if queue_var_name in v.name]
+    queue_vars = [v for v in tf.global_variables() if wgan.queue_var_name in v.name]
     queue_init_op = tf.variables_initializer(queue_vars)
     sess.run(queue_init_op)
 
@@ -38,26 +39,26 @@ def generatePredictions(wgan, sess):
     #Stitch together using attention
     #Make sure to rename objects that are the same name but different according to the attention
     #Return the argmaxed triples
-    return np.argmax(gen_output, axis=2), np.mean(disc_cost, axis=1)
+    return np.argmax(gen_output, axis=2), disc_cost#np.mean(disc_cost, axis=1)
 
-def loadAllValidationImages(path_to_val_batches):
+"""def loadAllValidationImages(path_to_val_batches):
     filenames = [os.path.join(path_to_val_batches, f) for f in os.listdir(path_to_val_batches) if f[-4:] == ".npz"]
     big_arr_list = []
     for f in range(len(filenames)):
         npz = np.load(filenames[f])
         big_arr_list.append(npz['arr_0'])
-    return np.concatenate(big_arr_list, axis=0)
+    return np.concatenate(big_arr_list, axis=0)"""
 
-def drawSamples(params, session, filename, count, triples):
-    samples_dir = params["samples_dir"]
+def drawSamples(wgan, session, filename, count, triples):
+    samples_dir = wgan.samples_dir
     img = Image.open(filename)
     new_im = Image.new('RGB', (224 + 300, 224))
     img = img.resize((224, 224), Image.ANTIALIAS)
     text_im = Image.new('RGB', (300, 224))
     draw = ImageDraw.Draw(text_im)
     position = 0
-    for i in xrange(len(triples)):
-        s = " ".join(tuple(triples))
+    for i in xrange(min(19, len(triples))):
+        s = " ".join(tuple(triples[i]))
         draw.text((10, 2 + (10*position)), s)
         position += 1
     new_im.paste(img, (0,0))
@@ -80,8 +81,7 @@ def decodeSamples(samples, decoder):
 #from somehow. Need to figure out how to put real captions beside the generated ones. 
 #Also potentially visualize attention here.
 def generateSamples(params, session, wgan):
-
-    path_to_val_batches = os.path.join(params["visual_genome"], "eval")
+    path_to_val_batches = os.path.join(params["vg_batches"], "eval")
     #path_to_dict = os.path.join(path_to_val_batches, "filename_to_feats_dict.json")
     path_to_batch_0_filenames = os.path.join(path_to_val_batches, 'filenames.txt')
 
@@ -90,29 +90,28 @@ def generateSamples(params, session, wgan):
     with open(path_to_batch_0_filenames, 'r') as f:
         filenames = [line.strip() for line in f]
 
+    samples_dir = wgan.samples_dir
     if not os.path.exists(samples_dir):
         os.makedirs(samples_dir)
-
-    samples_dir = wgan.samples_dir
 
     batch = params["batch_size"]
     count = 0
 
-    decoder = {y[1]:x for x, y in vocab.iteritems()}
+    decoder = {y:x for x, y in vocab.iteritems()}
 
     for f in filenames:
-        im_feats = np.array([filename_to_feats[f]]*batch)
+        #im_feats = np.array([filename_to_feats[f]]*batch)
         #TODO Check in params if relations only is true
-        samples, scores = generatePredictions(im_feats, graph_def, session, relations_only = True)
+        samples, scores = generatePredictions(wgan, session)
         samples = decodeSamples(samples, decoder)
-        drawSamples(params, session, f, count, triples)
+        drawSamples(wgan, session, f, count, samples)
         count += 1
         
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--visual_genome", default="./data/batches/", help="The path to the visual genome data. Defaults to ./data")
+    parser.add_argument("--vg_batches", default="./data/batches/", help="The path to the visual genome data. Defaults to ./data")
     parser.add_argument("--logs_dir", default="./logs/", help="The path to the logs where files will be saved and TensorBoard summaries are written.")
     parser.add_argument("--GPU", default="0", help="Which GPU to use")
     parser.add_argument("--samples_dir", default="./samples/", help="The path to the samples dir where samples will be generated.")
@@ -145,4 +144,4 @@ if __name__ == "__main__":
 
     with tf.Session() as sess:
         wgan = loadModel(params, sess)
-        generateSamples(wgan, sess)
+        generateSamples(params, sess, wgan)

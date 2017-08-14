@@ -154,13 +154,14 @@ class SceneGraphWGAN(object):
         self.global_step = tf.get_variable("global_step", shape=[], initializer=tf.constant_initializer(0), trainable=False)
 
         self.disc_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
-        if self.dataset_relations_only:
-            self.gen_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
-        else:
-            #disc_optimizer_decay = tf.train.exponential_decay(1e-2, self.disc_step, 10, .95, staircase=True)
-            gen_optimizer_decay = tf.train.exponential_decay(1e-3, self.global_step, 10000, .9, staircase=True)
-            #self.disc_optimizer = tf.train.GradientDescentOptimizer(disc_optimizer_decay)
-            self.gen_optimizer = tf.train.GradientDescentOptimizer(gen_optimizer_decay)
+        self.gen_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
+        #if self.dataset_relations_only:
+        #    self.gen_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9)
+        #else:
+        #    #disc_optimizer_decay = tf.train.exponential_decay(1e-2, self.disc_step, 10, .95, staircase=True)
+        #    gen_optimizer_decay = tf.train.exponential_decay(1e-3, self.global_step, 10000, .9, staircase=True)
+        #    #self.disc_optimizer = tf.train.GradientDescentOptimizer(disc_optimizer_decay)
+        #    self.gen_optimizer = tf.train.GradientDescentOptimizer(gen_optimizer_decay)
 
         self.fake_inputs = self.Generator(self.constant_ims, self.BATCH_SIZE, self.constant_flags)
 
@@ -232,7 +233,7 @@ class SceneGraphWGAN(object):
         if ckpt and ckpt.model_checkpoint_path:
             self.saver.restore(sess, ckpt.model_checkpoint_path)
         else:
-            print "Problem loading model, exiting"
+            print "Problem loading model at {}, exiting".format(os.path.join(self.checkpoints_dir, "model.ckpt"))
             sys.exit(1)
 
     def saveModel(self, sess, itr):
@@ -280,7 +281,7 @@ if __name__ == "__main__":
     parser.add_argument("--samples_dir", default="./samples/", help="The path to the samples dir where samples will be generated.")
     parser.add_argument("--vocab", default="./preprocessing/saved_data/vocab.json", help="Path to the vocabulary")
 
-    parser.add_argument("--batch_size", default=256, help="Batch size defaults to 128", type=int)
+    parser.add_argument("--batch_size", default=256, help="Batch size defaults to 256", type=int)
     parser.add_argument("--critic_iters", default=10, help="Number of iterations to train the critic", type=int)
     parser.add_argument("--generator", default="lstm", help="Generator defaults to LSTM with attention. See the architectures folder.")
     parser.add_argument("--discriminator", default="lstm", help="Discriminator defaults to LSTM with attention. See the architectures folder.")
