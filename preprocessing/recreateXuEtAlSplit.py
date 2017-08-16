@@ -298,10 +298,10 @@ def toNPZ(params):
         os.makedirs(eval_path)
 
     print "Generating image feats for eval data"
-    genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], eval_path, temp_path, eval = True)
+    genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], eval_path, params["temp_path"], eval = True)
 
     print "Generating image feats for training data"
-    genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], train_path, temp_path, eval = False)
+    genAndSaveImFeats(params["vg_images"], tf_graph, image_means, params["batch_size"], train_path, params["temp_path"], eval = False)
 
     #IMPORTANT!!!! YOU HAVE TO DO THE EVAL PATH NORMALIZATION BEFORE THE TRAINING PATH
     #SINCE THE EVAL NORMALIZATION DEPENDS ON STATISTICS FROM THE TRAINING PATH
