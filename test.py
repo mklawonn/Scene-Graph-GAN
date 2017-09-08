@@ -146,7 +146,7 @@ if __name__ == "__main__":
     with tf.Session() as sess:
         wgan = loadModel(params, sess)
         print "Done loading, sleeping for some amount of time to allow the queue to populate"
-        time.sleep(45)
+        time.sleep(150)
         count = 0
         for i in tqdm(range(wgan.custom_runner.num_validation_images)):
             triples = generatePredictions(wgan, sess)
