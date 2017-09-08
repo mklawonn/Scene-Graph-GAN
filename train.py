@@ -167,6 +167,8 @@ class SceneGraphWGAN(object):
 
         disc_real = self.Discriminator(self.constant_triples, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
         disc_fake = self.Discriminator(self.fake_inputs, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
+    
+        self.disc_fake = disc_fake
 
         disc_cost = tf.reduce_mean(disc_fake, axis=1) - tf.reduce_mean(disc_real, axis=1)
         disc_cost = tf.reduce_mean(disc_cost)

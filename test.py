@@ -6,112 +6,126 @@ import numpy as np
 
 import json
 import argparse
+import time
+from tqdm import tqdm
 
 from train import SceneGraphWGAN
+
+from postprocessing.generate_samples import generatePredictions
+from postprocessing.construct_graph import *
 
 attributes_flag = 0.0
 relations_flag = 1.0
 
 vocab_size = 0
 
-def loadModel(sess, params):
-    #Create WGAN instance
-    wgan = SceneGraphWGAN(params["visual_genome"], params["vocab"], params["generator"], params["discriminator"], params["logs_dir"], params["samples_dir"], 
-           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"], im_and_lang=params["use_language"], resume=False)
-    wgan.constructOps()
-    wgan.loadModel(sess)
-    return tf.get_default_graph().as_graph_def()
+def recallAtK(generated_triples, ground_truth_relations, k, batch_size):
 
-def generatePredictions(image_features, graph_def, sess, relations_only = True):
-    #Enqueue image features
-    #Initialize the queue variables
-    dummy_triples = np.zeros((image_features.shape[0], 3, vocab_size), dtype=np.float32)
-    if relations_only:
-        feed_dict = {im_feats_placeholder : image_features, triples_placeholder : dummy_triples, flag_placeholder : relations_flag}
-        #Generate a whole bunch of triples
-        #TODO: If the Add_14 tensor gets renamed make sure to change it here
-        triples_tensor = graph_def.get_tensor_by_name("Generator_1/generator_output:0")
-        scores_tensor = graph_def.get_tensor_by_name("Discriminator_2/Add_14:0")
-        
-        sub_att_vector = graph_def.get_tensor_by_name("Generator_1/attention_softmax:0")
-        pred_att_vector = graph_def.get_tensor_by_name("Generator_1/attention_softmax_1:0")
-        obj_att_vector = graph_def.get_tensor_by_name("Generator_1/attention_softmax_2:0")
-
-        triples, scores, sub_att, pred_att, obj_att = sess.run([triples_tensor, scores_tensor, sub_att_vector, pred_att_vector, obj_att_vector], feed_dict=feed_dict)
-    else:
-        pass
-    #Stitch together using attention
-    #Make sure to rename objects that are the same name but different according to the attention
-    #Return the argmaxed triples
-    return np.argmax(triples, axis=2), np.mean(scores, axis=1)
-
-def loadAllValidationImages(path_to_val_batches):
-    filenames = [os.path.join(path_to_val_batches, f) for f in os.listdir(path_to_val_batches) if f[-4:] == ".npz"]
-    big_arr_list = []
-    for f in range(len(filenames)):
-        npz = np.load(filenames[f])
-        big_arr_list.append(npz['arr_0'])
-    return np.concatenate(big_arr_list, axis=0)
-
-def recallAtK(im_feats, ground_truth_attributes, ground_truth_relations, model_def, sess, k, batch_size):
-    #Need to tile image features to be the batch_size that the model was built with
-    im_feats = np.reshape(im_feats, (1, im_feats.shape[0], im_feats.shape[1]))
-    im_feats = np.tile(im_feats, (batch_size, 1, 1))
-    fake_relations, scores = generatePredictions(im_feats, model_def, sess)
-    #Filter the fake relations based on associated scores, keeping only the top k
-    #Argsort scores
-    indices = np.argsort(scores)
-    #Reverse order
-    indices = np.flip(indices, axis=0)
-    #Truncate index list to top k
-    indices = indices[k:]
-    #Cut out any fake_relations not in the top k
-    fake_relations = fake_relations[indices]
-
-    #Compute the intersection of the fake_relations and the ground truth relations
-    #TODO: CRITICAL! We need to change duplicate entries in the ground_truth such that they're not identical
-    #e.g if there are two man-wears-shirt entries, change one to man1-wears-shirt1
-    #but then you probably also want to make sure that if both the fake and the ground truth describe the same duplicates,
-    #they also name them in the same way. E.g make sure man1 in gt isn't man in predicted
+    #I think we need to avoid altering generated triples in place
+    sorted_triples = generated_triples[:]
+    sorted_triples.sort(key=lambda x : x.disc_score, reverse=True)
+    sorted_triples = sorted_triples[:k]
+    
     gt_relations_set = set([tuple(i) for i in ground_truth_relations.tolist()])
-    fake_relations_set = set([tuple(i) for i in fake_relations.tolist()])
 
-    intersection_size = float(len(gt_relations_set.intersection(fake_relations_set)))
+    fake_relations_set = set([(i.triple[0].getVocabIndex(), i.triple[1], i.triple[2].getVocabIndex()) for i in sorted_triples])
+
+    relations_intersection = float(len(gt_relations_set.intersection(fake_relations_set)))
 
     #Divide by the number of ground_truth relations
     num_relations = float(ground_truth_relations.shape[0])
-    r_at_k = intersection_size / num_relations
+    r_at_k = relations_intersection / num_relations
     return r_at_k
+
+def recallAtKWithAttributes(generated_triples, ground_truth_relations, ground_truth_attributes, k, batch_size):
+    ground_truth_triples = np.concatenate((ground_truth_relations, ground_truth_attributes), axis=0)
+
+    generated_relations = [i for i in generated_triples if not i.is_attribute]
+    generated_attributes = [i for i in generated_triples if i.is_attribute]
+
+    sorted_relations = generated_relations[:]
+    sorted_relations.sort(key=lambda x : x.disc_score, reverse=True)
+    sorted_relations = sorted_relations[:k]
+
+    sorted_attributes = generated_attributes[:]
+    sorted_attributes.sort(key=lambda x : x.disc_score, reverse=True)
+    sorted_attributes = sorted_attributes[:k]
+
+    sorted_triples = generated_triples[:]
+    sorted_triples.sort(key=lambda x : x.disc_score, reverse=True)
+    sorted_triples = sorted_triples[:k]
+
+    gt_relations_set = set([tuple(i) for i in ground_truth_relations.tolist()])
+    gt_attributes_set = set([tuple(i) for i in ground_truth_attributes.tolist()])
+    gt_triples_set = set([tuple(i) for i in ground_truth_triples.tolist()])
+
+    fake_relations_set = set([(i.triple[0].getVocabIndex(), i.triple[1], i.triple[2].getVocabIndex()) for i in sorted_relations])
+    fake_attributes_set = set([(i.triple[0].getVocabIndex(), i.triple[1], i.triple[2].getVocabIndex()) for i in sorted_attributes])
+    fake_triples_set = set([(i.triple[0].getVocabIndex(), i.triple[1], i.triple[2].getVocabIndex()) for i in sorted_triples])
+
+    relations_intersection = float(len(gt_relations_set.intersection(fake_relations_set)))
+    attributes_intersection = float(len(gt_attributes_set.intersection(fake_attributes_set)))
+    triples_intersection  = float(len(gt_triples_set.intersection(fake_triples_set)))
+
+    num_relations = float(ground_truth_relations.shape[0])
+    num_attributes = float(ground_truth_attributes.shape[0])
+    num_triples = num_relations+num_attributes
+
+    rel_r_at_k = relations_intersection / num_relations
+    att_r_at_k = attributes_intersection / num_attributes
+    triples_r_at_k = triples_intersection / num_triples
+
+    return rel_r_at_k, att_r_at_k, triples_r_at_k
+
+def loadModel(params, sess):
+    #Create WGAN instance
+    wgan = SceneGraphWGAN(params["vg_batches"], params["vocab"], params["generator"], params["discriminator"], params["logs_dir"], params["samples_dir"], 
+           BATCH_SIZE=params["batch_size"], CRITIC_ITERS=params["critic_iters"], LAMBDA=params["lambda"], im_and_lang=params["use_language"],
+           validation = True, resume=False, dataset_relations_only = params["dataset_relations_only"])
+    wgan.constructOps()
+    wgan.loadModel(sess)
+    decoder = {y:x for x,y in wgan.vocab.iteritems()}
+    queue_var_name = wgan.queue_var_name
+    #return tf.get_default_graph().as_graph_def()
+    tf.train.start_queue_runners(sess=sess)
+    wgan.custom_runner.start_threads(sess) 
+    #wgan.custom_runner.start_threads(sess)
+    return wgan
+
+def printProgress(params, recallAtKDict):
+    if params["dataset_relations_only"]:
+        for k in recallAtKDict:
+            recall = (float(sum(recallAtKDict[k])) / float(len(recallAtKDict[k])))*100.0
+            print "This data was relations only: all triples recall at {} was {}".format(k, recall)
+    else:
+        for k in recallAtKDict:
+            #recallAtKDict[k][0] = (float(sum([i[0] for i in recallAtKDict[k]])) / float(len(recallAtKDict[k])))*100.0
+            rel_recall = (float(sum([i[0] for i in recallAtKDict[k]])) / float(len(recallAtKDict[k]))) * 100.0
+            att_recall = (float(sum([i[1] for i in recallAtKDict[k]])) / float(len(recallAtKDict[k])))*100.0
+            trip_recall = (float(sum([i[2] for i in recallAtKDict[k]])) / float(len(recallAtKDict[k])))*100.0
+            print "Relations recall at {} was {}".format(k, rel_recall)
+            print "Attributes recall at {} was {}".format(k, att_recall)
+            print "All triples recall at {} was {}".format(k, trip_recall)
     
-
-def measurePerformance(model_def, big_arr, sess, batch_size):
-    recallAtKDict = {50 : [], 100 : []}
-    for k in recallAtKDict:
-        for i in xrange(0, big_arr.shape[0], 3):
-            recallAtKDict[k].append(recallAtK(big_arr[i], big_arr[i+1], big_arr[i+2], model_def, sess, k, batch_size))
-        recallAtKDict[k] = (float(sum(recallAtKDict[k])) / float(len(recallAtKDict[k])))*100.0
-    return recallAtKDict
-
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--visual_genome", default="./data/batches/", help="The path to the visual genome data. Defaults to ./data")
+    parser.add_argument("--vg_batches", default="./data/batches/", help="The path to the visual genome data. Defaults to ./data")
     parser.add_argument("--logs_dir", default="./logs/", help="The path to the logs where files will be saved and TensorBoard summaries are written.")
     parser.add_argument("--GPU", default="0", help="Which GPU to use")
     parser.add_argument("--samples_dir", default="./samples/", help="The path to the samples dir where samples will be generated.")
-    parser.add_argument("--vocab", default="./preprocessing/vocab.json", help="Path to the vocabulary")
+    parser.add_argument("--vocab", default="./preprocessing/saved_data/vocab.json", help="Path to the vocabulary")
+    parser.add_argument("--critic_iters", default=10)
 
     parser.add_argument("--batch_size", default=256, help="Batch size defaults to 256", type=int)
-    parser.add_argument("--critic_iters", default=10, help="Number of iterations to train the critic", type=int)
     parser.add_argument("--generator", default="lstm", help="Generator defaults to LSTM with attention. See the architectures folder.")
     parser.add_argument("--discriminator", default="lstm", help="Discriminator defaults to LSTM with attention. See the architectures folder.")
-    parser.add_argument("--epochs", default=30, help="Number of epochs defaults to 30", type=int)
-    parser.add_argument("--print_interval", default=500, help="The model will be saved and samples will be generated every <print_interval> iterations", type=int)
     parser.add_argument("--tf_verbosity", default="ERROR", help="Sets tensorflow verbosity. Specifies which warning level to suppress. Defaults to ERROR")
     parser.add_argument("--lambda", default=10, help="Lambda term which regularizes to be close to one lipschitz", type=int)
     parser.add_argument("--use_language", default=False, help="Determines whether the generator update is also based on a discriminator trained on language only", type=bool)
+    parser.add_argument("--dataset_relations_only", default=False, help="When true, indicates that the data only contains relations, and will affect how data is read", type=bool)
 
 
     args = parser.parse_args()
@@ -127,11 +141,38 @@ if __name__ == "__main__":
     #Call this just in case the graph is persisting due to TF closing suddenly
     tf.reset_default_graph()
 
-    path_to_val_batches = os.path.join(params["visual_genome"], "eval")
-    
-    big_arr = loadAllValidationImages(path_to_val_batches)
+    recallAtKDict = {50 : [], 100 : []}
+
     with tf.Session() as sess:
-        model_def = loadModel(sess, params)
-        recallAtKDict = measurePerformance(model_def, big_arr, sess)
-        for k in recallAtKDict:
-            print "Recall @ {}: {}".format(k, recallAtKDict[k])
+        wgan = loadModel(params, sess)
+        print "Done loading, sleeping for some amount of time to allow the queue to populate"
+        time.sleep(45)
+        count = 0
+        for i in tqdm(range(wgan.custom_runner.num_validation_images)):
+            triples = generatePredictions(wgan, sess)
+            all_entities = findAllEntities(triples)
+            potential_duplicates = determinePotentialDuplicates(list(all_entities))
+            resolveDuplicateEntities(potential_duplicates, all_entities, triples)
+
+            #TODO Rewrite recall at k and measure performance functions to compare the following two
+            #ground truth things to the triples. By this line, triples should be comparable (e.g resolved)
+            #Will need to account for the appended id though (e.g person3 should just be person)
+            gt_rels = wgan.custom_runner.gt_rels.get()
+            gt_atts = wgan.custom_runner.gt_atts.get()
+            for k in recallAtKDict:
+                if params["dataset_relations_only"]:
+                    recallAtKDict[k].append(recallAtK(triples, gt_rels, gt_atts, k, params["batch_size"]))
+                else:
+                    rel_r_at_k, att_r_at_k, triples_r_at_k = recallAtKWithAttributes(triples, gt_rels, gt_atts, k, params["batch_size"])
+                    recallAtKDict[k].append((rel_r_at_k, att_r_at_k, triples_r_at_k))
+            del triples
+            del all_entities
+            del potential_duplicates
+            count += 1
+            if (count % 500) == 499:
+                printProgress(params, recallAtKDict)
+
+    print "-"*35
+    print "Final stats"
+    print "-"*35
+    printProgress(params, recallAtKDict)

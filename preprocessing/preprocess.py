@@ -473,5 +473,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     params = vars(args)
 
+    if not os.path.exists(os.path.join("preprocessing", "saved_data")):
+        os.makedirs(os.path.join("preprocessing", "saved_data"))
+
     #toNPZ(path_to_data, vgg_tf_model)
     toNPZ(params["visual_genome"], params["vg_images"], params["vg_data"], params["vgg_model"])
