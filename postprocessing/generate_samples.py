@@ -6,14 +6,19 @@ import numpy as np
 import argparse
 import json
 import collections
+import operator
 
 from train import SceneGraphWGAN
 
 #####################################################
 # Global Variables
 #####################################################
-decoder = {}
-entity_identifier = 0
+
+def init():
+    global decoder
+    global entity_identifier
+    decoder = {}
+    entity_identifier = 0
 
 class Entity(object):
     def __init__(self, unique_id, vocab_index):
@@ -72,9 +77,9 @@ class Triple(object):
     def decode(self):
         global decoder
         if self.is_attribute:
-            return " ".join([self.triple[0].getName(), decoder[self.triple[1]], decoder[self.triple[2].vocab_index]])
+            return "{} {} {}".format(self.triple[0].getName(), decoder[self.triple[1]], decoder[self.triple[2].vocab_index])
         else:
-            return " ".join([self.triple[0].getName(), decoder[self.triple[1]], self.triple[2].getName()])
+            return "{} {} {}".format(self.triple[0].getName(), decoder[self.triple[1]], self.triple[2].getName())
 
 
 def generatePredictions(wgan, sess):
@@ -89,6 +94,7 @@ def generatePredictions(wgan, sess):
     r_attention_vectors = np.transpose(np.array([subject_att, predicate_att, object_att]), (1, 0, 2))
     relations = np.argmax(relations, axis=2)
     rel_triples = [Triple(relations[i], r_attention_vectors[i], r_score[i][0], is_attribute=False) for i in range(relations.shape[0])]
+    att_triples = []
 
     if not wgan.dataset_relations_only:
         queue_vars = [v for v in tf.global_variables() if wgan.queue_var_name in v.name]

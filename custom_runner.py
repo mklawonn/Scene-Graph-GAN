@@ -57,13 +57,16 @@ class CustomRunner(object):
 
     def generateBigValArr(self):
         eval_path = os.path.join(self.batch_path, "eval")
-        filenames = [os.path.join(eval_path, i) for i in os.listdir(eval_path) if i[-4:] == ".npz"]
-        big_arr_list = []
-        for f in range(len(filenames)):
-            npz = np.load(filenames[f])
-            big_arr_list.append(npz['arr_0'])
-        return np.concatenate(big_arr_list, axis=0)
-
+        #filenames = [os.path.join(eval_path, i) for i in os.listdir(eval_path) if i[-4:] == ".npz"]
+        #big_arr_list = []
+        #for f in range(len(filenames)):
+        #    npz = np.load(filenames[f])
+        #    big_arr_list.append(npz['arr_0'])
+        #return np.concatenate(big_arr_list, axis=0)
+        npz = np.load(os.path.join(eval_path, "batch_0.npz"))
+        big_arr = npz['arr_0']
+        return big_arr
+        
     def oneHot(self, trips):
         one_hot = np.zeros((trips.shape[0], self.seq_len, self.vocab_size), dtype=np.float32)
         for i in range(trips.shape[0]):
