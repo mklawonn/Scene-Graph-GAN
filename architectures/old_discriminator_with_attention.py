@@ -14,6 +14,7 @@ class Discriminator(object):
         self.n_lstm_steps = n_lstm_steps
         #self.batch_size = batch_size
         self.maxlen = n_lstm_steps
+        self.flag_shape = 512
 
         xavier_initializer = tf.contrib.layers.xavier_initializer()
         constant_initializer = tf.constant_initializer(0.05)
@@ -33,7 +34,7 @@ class Discriminator(object):
         self.att_W = tf.get_variable("att_W", [(self.dim_context*2)+self.dim_hidden, self.context_shape[0]], initializer=xavier_initializer)
         self.att_b = tf.get_variable("att_b", [self.context_shape[0]], initializer=constant_initializer)
 
-        self.lstm_W = tf.get_variable("lstm_W", [self.dim_context+self.dim_hidden+self.dim_embed, self.dim_hidden*4], initializer=xavier_initializer)
+        self.lstm_W = tf.get_variable("lstm_W", [self.dim_context+self.dim_hidden+self.dim_embed+self.flag_shape, self.dim_hidden*4], initializer=xavier_initializer)
         self.lstm_b = tf.get_variable("lstm_b", [self.dim_hidden*4], initializer=constant_initializer)
 
         #self.init_hidden_W = tf.get_variable("init_hidden_W", [self.dim_context, self.dim_hidden], initializer=xavier_initializer)
@@ -48,15 +49,15 @@ class Discriminator(object):
         self.init_memory_W = tf.get_variable("init_memory_W", [self.dim_context + self.vocab_size, self.dim_hidden], initializer=xavier_initializer)
         self.init_memory_b = tf.get_variable("init_memory_b", [self.dim_hidden], initializer=constant_initializer)
 
-        #self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, 1], initializer=xavier_initializer)
-        #self.decode_lstm_b = tf.get_variable("decode_lstm_b", [1], initializer=constant_initializer)
+        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, 1], initializer=xavier_initializer)
+        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [1], initializer=constant_initializer)
 
         #Uncomment the next four lines of code for a deep output layer
-        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.dim_embed], initializer=xavier_initializer)
-        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.dim_embed], initializer=constant_initializer)
+        #self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.dim_embed], initializer=xavier_initializer)
+        #self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.dim_embed], initializer=constant_initializer)
 
-        self.decode_word_W = tf.get_variable("decode_word_W", [self.dim_embed, 1], initializer=xavier_initializer)
-        self.decode_word_b = tf.get_variable("decode_word_b", [1], initializer=constant_initializer)
+        #self.decode_word_W = tf.get_variable("decode_word_W", [self.dim_embed, 1], initializer=xavier_initializer)
+        #self.decode_word_b = tf.get_variable("decode_word_b", [1], initializer=constant_initializer)
 
         #For layer normalization:
         self.init_hidden_alpha = tf.get_variable("init_hidden/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
@@ -103,12 +104,14 @@ class Discriminator(object):
 
         return initial_hidden, initial_memory
 
-    def build_discriminator(self, context, input_triples, batch_size):
+    def build_discriminator(self, context, input_triples, batch_size, attributes_flag):
         #From the paper: The initial memory state and hidden state of the LSTM are predicted
         #by an average of the annotation vectors fed through two separate MLPs
         first_word = input_triples[:, 0, :]
         h, c = self.get_initial_lstm(tf.reduce_mean(context, 1), first_word)#(batch_size, dim_hidden)
 
+        flag = tf.reshape(attributes_flag, [batch_size, 1])
+        flag = tf.tile(flag, [1, self.flag_shape])
         #embedded_flag = tf.add(tf.matmul(flag, self.flag_encode_W), self.flag_encode_b)
 
         flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])
@@ -133,7 +136,7 @@ class Discriminator(object):
             z_hat = tf.reduce_sum(context * tf.expand_dims(alpha, 2), 1) #Output is [batch size, D]
             #Equation (1)
             #Concatenate \hat{z}_t , h_{t-1}, and the embedding of the previous word 
-            lstm_input = tf.concat([z_hat, h, word_emb], 1)
+            lstm_input = tf.concat([z_hat, h, word_emb, flag], 1)
             #Perform affine transformation of concatenated vector
             affine = tf.add(tf.matmul(lstm_input, self.lstm_W), self.lstm_b)
             i, f, o, g = tf.split(affine, 4, 1)
@@ -158,10 +161,9 @@ class Discriminator(object):
 
             logits = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
 
-            logit_words = tf.add(tf.matmul(logits, self.decode_word_W), self.decode_word_b)
+            #logit_words = tf.add(tf.matmul(logits, self.decode_word_W), self.decode_word_b)
 
-            #logits_list.append(logits)
-            logits_list.append(logit_words)
+            logits_list.append(logits)
             
 
         #all_logits = tf.stack(logits_list)

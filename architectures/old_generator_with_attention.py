@@ -12,6 +12,7 @@ class Generator(object):
         self.noise_dim = context_shape[1]
         self.dim_embed = dim_embed
         self.soft_gumbel_temp = 0.9
+        self.flag_shape = 512
 
         self.attention_vectors = []
 
@@ -25,8 +26,11 @@ class Generator(object):
         self.context_encode_W = tf.get_variable("context_encode_W", [self.context_shape[0]*self.context_shape[1], self.context_shape[1]*2], initializer=xavier_initializer)
         self.context_encode_b = tf.get_variable("context_encode_b", [self.context_shape[1]*2], initializer=constant_initializer)
 
-        #self.noise_emb_W = tf.get_variable("noise_emb_W", [self.noise_dim, self.noise_dim], initializer=xavier_initializer)
-        #self.noise_emb_b = tf.get_variable("noise_emb_b", [self.noise_dim], initializer=constant_initializer)
+        #self.flag_encode_W = tf.get_variable("flag_encode_W", [self.flag_shape, self.context_shape[1]], initializer=xavier_initializer)
+        #self.flag_encode_b = tf.get_variable("flag_encode_b", [self.context_shape[1]], initializer=constant_initializer)
+
+        self.noise_emb_W = tf.get_variable("noise_emb_W", [self.noise_dim, self.noise_dim], initializer=xavier_initializer)
+        self.noise_emb_b = tf.get_variable("noise_emb_b", [self.noise_dim], initializer=constant_initializer)
 
         self.Wemb = tf.get_variable("Wemb", [self.vocab_size, self.dim_embed], initializer=xavier_initializer)
 
@@ -35,25 +39,24 @@ class Generator(object):
         self.att_W = tf.get_variable("att_W", [(self.context_shape[1]*2)+self.dim_hidden, self.context_shape[0]], initializer=xavier_initializer)
         self.att_b = tf.get_variable("att_b", [self.context_shape[0]], initializer=constant_initializer)
 
-        self.lstm_W = tf.get_variable("lstm_W", [self.context_shape[1]+self.dim_hidden+self.dim_embed+self.noise_dim, self.dim_hidden*4], initializer=xavier_initializer)
+        self.lstm_W = tf.get_variable("lstm_W", [self.context_shape[1]+self.dim_hidden+self.dim_embed+self.noise_dim+self.flag_shape, self.dim_hidden*4], initializer=xavier_initializer)
         self.lstm_b = tf.get_variable("lstm_b", [self.dim_hidden*4], initializer=constant_initializer)
 
-        self.init_hidden_W = tf.get_variable("init_hidden_W", [self.context_shape[1]+self.noise_dim, self.dim_hidden], initializer=xavier_initializer)
+        self.init_hidden_W = tf.get_variable("init_hidden_W", [self.context_shape[1], self.dim_hidden], initializer=xavier_initializer)
         self.init_hidden_b = tf.get_variable("init_hidden_b", [self.dim_hidden], initializer=constant_initializer)
 
-        self.init_memory_W = tf.get_variable("init_memory_W", [self.context_shape[1]+self.noise_dim, self.dim_hidden], initializer=xavier_initializer)
+        self.init_memory_W = tf.get_variable("init_memory_W", [self.context_shape[1], self.dim_hidden], initializer=xavier_initializer)
         self.init_memory_b = tf.get_variable("init_memory_b", [self.dim_hidden], initializer=constant_initializer)
 
-        #Uncomment these two lines for a shallow architecture
-        #self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.vocab_size], initializer=xavier_initializer)
-        #self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.vocab_size], initializer=constant_initializer)
+        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.vocab_size], initializer=xavier_initializer)
+        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.vocab_size], initializer=constant_initializer)
 
         #Uncomment the next four lines for a deep output layer
-        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.dim_embed], initializer=xavier_initializer)
-        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.dim_embed], initializer=constant_initializer)
+        #self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.dim_embed], initializer=xavier_initializer)
+        #self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.dim_embed], initializer=constant_initializer)
 
-        self.decode_word_W = tf.get_variable("decode_word_W", [self.dim_embed, self.vocab_size], initializer=xavier_initializer)
-        self.decode_word_b = tf.get_variable("decode_word_b", [self.vocab_size], initializer=constant_initializer)
+        #self.decode_word_W = tf.get_variable("decode_word_W", [self.dim_embed, self.vocab_size], initializer=xavier_initializer)
+        #self.decode_word_b = tf.get_variable("decode_word_b", [self.vocab_size], initializer=constant_initializer)
 
         #For layer normalization:
         self.init_hidden_alpha = tf.get_variable("init_hidden/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
@@ -77,13 +80,20 @@ class Generator(object):
         self.g_alpha = tf.get_variable("g/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
         self.g_beta = tf.get_variable("g/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
 
-    def get_initial_lstm(self, context_and_noise):
+    def get_initial_lstm(self, initial_context):
         #From the paper: "The initial memory state and hidden state of the LSTM are predicted by an average
         #of the annotation vectors fed through two separate MLPs (init,c and init,h)"
         #This is done via the mean_context ops
         #context_and_noise = tf.concat([mean_context, noise], 1)
-        initial_hidden = tf.nn.tanh(tf.add(tf.matmul(context_and_noise, self.init_hidden_W), self.init_hidden_b))
-        initial_memory = tf.nn.tanh(tf.add(tf.matmul(context_and_noise, self.init_memory_W), self.init_memory_b))
+        #initial_hidden = tf.nn.tanh(tf.add(tf.matmul(context_and_noise, self.init_hidden_W), self.init_hidden_b))
+        #initial_memory = tf.nn.tanh(tf.add(tf.matmul(context_and_noise, self.init_memory_W), self.init_memory_b))
+
+        initial_hidden = tf.add(tf.matmul(initial_context, self.init_hidden_W), self.init_hidden_b)
+        initial_hidden = self.layer_normalization(initial_hidden, self.init_hidden_alpha, self.init_hidden_beta)
+        initial_hidden = tf.nn.tanh(initial_hidden)
+        initial_memory = tf.add(tf.matmul(initial_context, self.init_memory_W), self.init_memory_b)
+        initial_memory = self.layer_normalization(initial_memory, self.init_memory_alpha, self.init_memory_beta)
+        initial_memory = tf.nn.tanh(initial_memory)
 
         return initial_hidden, initial_memory
 
@@ -93,7 +103,10 @@ class Generator(object):
         normalized = scale * (inputs - mean) / tf.sqrt(var + epsilon) + shift
         return normalized
 
-    def build_generator(self, context, batch_size):
+    def build_generator(self, context, batch_size, attributes_flag):
+        flag = tf.reshape(attributes_flag, [batch_size, 1])
+        flag = tf.tile(flag, [1, self.flag_shape])
+        #embedded_flag = tf.add(tf.matmul(flag, self.flag_encode_W), self.flag_encode_b)
 
         flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])
         encoded_context = tf.add(tf.matmul(flattened_context, self.context_encode_W), self.context_encode_b)
@@ -101,15 +114,20 @@ class Generator(object):
         #encoded_context = tf.nn.relu(encoded_context)
 
         #Does different noise make a difference?
-        noise = tf.random_uniform([batch_size, self.noise_dim], minval=0, maxval=1)
+        noise = tf.random_normal([batch_size, self.noise_dim], mean=0.0, stddev=1.0)
         #embedded_noise = tf.add(tf.matmul(noise, self.noise_emb_W), self.noise_emb_b)
         #embedded_noise = tf.nn.relu(embedded_noise)
 
 
         #h, c = self.get_initial_lstm(tf.reduce_mean(context, 1), noise)#(batch_size, dim_hidden + dim_noise)
-        context_and_noise = tf.concat([tf.reduce_mean(context, 1), noise], 1)
 
-        h, c = self.get_initial_lstm(context_and_noise)#(batch_size, dim_hidden)
+        #Randomly select an initial feature vector from the image. This will be used to initialize the lstm
+        random_slice = tf.random_uniform([batch_size], minval=0, maxval=self.context_shape[0]-1, dtype=tf.int32)
+        one_hot = tf.one_hot(random_slice, self.context_shape[0], on_value=1.0, off_value=0.0, dtype=tf.float32)
+        one_hot = tf.expand_dims(one_hot, 1)
+        initial_context = tf.matmul(one_hot, context)
+        initial_context = tf.reshape(initial_context, [batch_size, self.context_shape[1]])
+        h, c = self.get_initial_lstm(initial_context)#(batch_size, dim_hidden)
 
         l = []
 
@@ -134,7 +152,7 @@ class Generator(object):
             #with the intuition being that we want to look in a slightly random place, but
             #also then say varying things about that place
             #lstm_input = tf.concat([z_hat, h, word_emb, embedded_noise, flag], 1)
-            lstm_input = tf.concat([z_hat, h, word_emb, noise], 1)
+            lstm_input = tf.concat([z_hat, h, word_emb, noise, flag], 1)
             #Perform affine transformation of concatenated vector
             affine = tf.add(tf.matmul(lstm_input, self.lstm_W), self.lstm_b)
             i, f, o, g = tf.split(affine, 4, 1)
@@ -158,10 +176,11 @@ class Generator(object):
             h = o * tf.nn.tanh(c)
 
             #Could make the decoding a "deep output layer" by adding another layer
-            out_word_embedding = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
-            vocab_logits = tf.add(tf.matmul(out_word_embedding, self.decode_word_W), self.decode_word_b)
+            logits = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
             #logit_words = tf.add(tf.matmul(logits, self.decode_word_W), self.decode_word_b)
-            word_prob = tf.nn.softmax(vocab_logits)
+            word_prob = tf.nn.softmax(logits)
+            #word_prob = tf.nn.softmax(logit_words)
+            #word_prob = tf.contrib.distributions.RelaxedOneHotCategorical(soft_gumbel_temp, logits=logits).sample()
             word_prediction = tf.argmax(word_prob, 1)
             l.append(word_prob)
 

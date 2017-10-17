@@ -122,16 +122,16 @@ class SceneGraphWGAN(object):
             with tf.variable_scope("LanguageDiscriminator") as scope:
                 self.language_d = language_dim(self.vocab_size, batch_size = self.BATCH_SIZE)
 
-    def Generator(self, image_feats, batch_size, attribute_or_relation, prev_outputs=None):
+    def Generator(self, image_feats, batch_size, prev_outputs=None):
         print "Building Generator"
         with tf.variable_scope("Generator", reuse=True) as scope:
-            generated_words = self.g.build_generator(image_feats, batch_size, attribute_or_relation)
+            generated_words = self.g.build_generator(image_feats, batch_size)
             return generated_words
 
-    def Discriminator(self, triple_input, image_feats, batch_size, attribute_or_relation):
+    def Discriminator(self, triple_input, image_feats, batch_size):
         print "Building Discriminator"
         with tf.variable_scope("Discriminator", reuse=True) as scope:
-            logits = self.d.build_discriminator(image_feats, triple_input, batch_size, attribute_or_relation)
+            logits = self.d.build_discriminator(image_feats, triple_input, batch_size)
             if self.im_and_lang:
                 lang_logits = self.language_d.build_discriminator(image_feats, triple_input, batch_size, attribute_or_relation)
                 return tf.add(logits, lang_logits)
@@ -143,12 +143,11 @@ class SceneGraphWGAN(object):
         with tf.device("/cpu:0"):
             self.custom_runner = CustomRunner(self.image_feat_dim, self.vocab_size, self.seq_len, self.BATCH_SIZE, self.batch_path, self.dataset_relations_only, self.validation)
             #self.inputs = self.custom_runner.get_inputs()
-            ims, triples, flags = self.custom_runner.get_inputs()
+            ims, triples = self.custom_runner.get_inputs()
 
         with tf.device("/gpu:0"):
             self.constant_ims = tf.get_variable("{}_ims".format(self.queue_var_name), initializer=ims, trainable=False)
             self.constant_triples = tf.get_variable("{}_triples".format(self.queue_var_name), initializer=triples, trainable=False)
-            self.constant_flags = tf.get_variable("{}_flags".format(self.queue_var_name), initializer=flags, trainable=False)
             self.disc_step = tf.get_variable("{}_disc_step".format(self.queue_var_name), shape=[], initializer=tf.constant_initializer(0), trainable=False)
 
         self.global_step = tf.get_variable("global_step", shape=[], initializer=tf.constant_initializer(0), trainable=False)
@@ -163,10 +162,10 @@ class SceneGraphWGAN(object):
         #    #self.disc_optimizer = tf.train.GradientDescentOptimizer(disc_optimizer_decay)
         #    self.gen_optimizer = tf.train.GradientDescentOptimizer(gen_optimizer_decay)
 
-        self.fake_inputs = self.Generator(self.constant_ims, self.BATCH_SIZE, self.constant_flags)
+        self.fake_inputs = self.Generator(self.constant_ims, self.BATCH_SIZE)
 
-        disc_real = self.Discriminator(self.constant_triples, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
-        disc_fake = self.Discriminator(self.fake_inputs, self.constant_ims, self.BATCH_SIZE, self.constant_flags)
+        disc_real = self.Discriminator(self.constant_triples, self.constant_ims, self.BATCH_SIZE)
+        disc_fake = self.Discriminator(self.fake_inputs, self.constant_ims, self.BATCH_SIZE)
     
         self.disc_fake = disc_fake
 
@@ -183,7 +182,7 @@ class SceneGraphWGAN(object):
         )
         differences = tf.subtract(self.fake_inputs, self.constant_triples)
         interpolates = tf.add(self.constant_triples, tf.multiply(alpha, differences))
-        gradients = tf.gradients(self.Discriminator(interpolates, self.constant_ims, self.BATCH_SIZE, self.constant_flags), [interpolates])[0]
+        gradients = tf.gradients(self.Discriminator(interpolates, self.constant_ims, self.BATCH_SIZE), [interpolates])[0]
         slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
         gradient_penalty = tf.reduce_mean((slopes-1.)**2)
         self.disc_cost = tf.add(disc_cost, tf.multiply(LAMBDA, gradient_penalty))

@@ -22,29 +22,25 @@ class CustomRunner(object):
         self.batch_path = batch_path
         queue_capacity = batch_size*10
 
-        self.attributes_flag = 0.0
-        self.relations_flag = 1.0
-
         self.im_feats_placeholder = tf.placeholder(tf.float32, shape=[image_feat_dim[0], image_feat_dim[1]])
         self.triples_placeholder = tf.placeholder(tf.float32, shape=[seq_len, vocab_size])
-        self.flag_placeholder = tf.placeholder(tf.float32, shape=[])
 
         self.dataset_relations_only = dataset_relations_only
         self.validation = validation
         self.num_validation_images = 0
 
         min_after_dequeue = 0
-        shapes = [[image_feat_dim[0], image_feat_dim[1]], [seq_len, vocab_size], []]
+        shapes = [[image_feat_dim[0], image_feat_dim[1]], [seq_len, vocab_size]]
 
         if validation:
-            self.queue = tf.FIFOQueue(queue_capacity, dtypes=[tf.float32, tf.float32, tf.float32], shapes=shapes)
+            self.queue = tf.FIFOQueue(queue_capacity, dtypes=[tf.float32, tf.float32], shapes=shapes)
             self.gt_rels = Queue()
             self.gt_atts = Queue()
         else:
-            self.queue = tf.RandomShuffleQueue(queue_capacity, min_after_dequeue, dtypes=[tf.float32, tf.float32, tf.float32], shapes=shapes)
+            self.queue = tf.RandomShuffleQueue(queue_capacity, min_after_dequeue, dtypes=[tf.float32, tf.float32], shapes=shapes)
 
         self.queue_size_op = self.queue.size()
-        self.enqueue_op = self.queue.enqueue([self.im_feats_placeholder, self.triples_placeholder, self.flag_placeholder])
+        self.enqueue_op = self.queue.enqueue([self.im_feats_placeholder, self.triples_placeholder])
 
     def generateBigArr(self):
         train_path = os.path.join(self.batch_path, "train")
@@ -82,14 +78,12 @@ class CustomRunner(object):
             #Yield one_hot encoded attributes
             trips = self.oneHot(atts)
             im_feats = np.tile(np.expand_dims(big_arr[i], axis=0), (max(atts.shape[0], rels.shape[0]), 1, 1))
-            flag = np.tile(self.attributes_flag, trips.shape[0])
             for j in range(trips.shape[0]):
-                yield im_feats[j], trips[j], flag[j]
+                yield im_feats[j], trips[j]
             #Yield one_hot encoded relations
             trips = self.oneHot(rels)
-            flag = np.tile(self.relations_flag, trips.shape[0])
             for j in range(trips.shape[0]):
-                yield im_feats[j], trips[j], flag[j]
+                yield im_feats[j], trips[j]
 
     def relationsOnlyDataGenerator(self):
         big_arr = self.generateBigArr()
@@ -97,9 +91,8 @@ class CustomRunner(object):
             rels = big_arr[i+1]
             trips = self.oneHot(rels)
             im_feats = np.tile(np.expand_dims(big_arr[i], axis=0), (rels.shape[0], 1, 1))
-            flag = np.tile(self.relations_flag, trips.shape[0])
             for j in range(trips.shape[0]):
-                yield im_feats[j], trips[j], flag[j]
+                yield im_feats[j], trips[j]
 
     def relationsOnlyValidationGenerator(self):
         big_arr = self.generateBigValArr()
@@ -112,11 +105,10 @@ class CustomRunner(object):
             rels = np.ones((self.batch_size, 3), dtype=np.int64)
             trips = self.oneHot(rels)
             im_feats = np.tile(np.expand_dims(big_arr[i], axis=0), (rels.shape[0], 1, 1))
-            flag = np.tile(self.relations_flag, trips.shape[0])
             #Queue up this batch of relations to compare
             self.gt_rels.put(gt_rels)
             for j in range(trips.shape[0]):
-                yield im_feats[j], trips[j], flag[j]
+                yield im_feats[j], trips[j]
 
     def validationGenerator(self):
         print "Queue runner loading big_arr"
@@ -129,21 +121,18 @@ class CustomRunner(object):
             rels = np.ones((self.batch_size*2, 3), dtype=np.int64)
             trips = self.oneHot(rels)
             im_feats = np.tile(np.expand_dims(big_arr[i], axis=0), (self.batch_size*2, 1, 1))
-            rel_flag = np.tile(self.relations_flag, trips.shape[0])
-            att_flag = np.tile(self.relations_flag, trips.shape[0])
-            flag = np.concatenate((rel_flag, att_flag), axis=0)
             self.gt_rels.put(gt_rels)
             self.gt_atts.put(gt_atts)
             for j in range(trips.shape[0]):
-                yield im_feats[j], trips[j], flag[j]
+                yield im_feats[j], trips[j]
 
     
     def get_inputs(self):
         """
         Return's tensors containing a batch of images and labels
         """
-        ims, triples, flags = self.queue.dequeue_many(self.batch_size, name="DequeueOp")
-        return ims, triples, flags
+        ims, triples = self.queue.dequeue_many(self.batch_size, name="DequeueOp")
+        return ims, triples
 
     def thread_main(self, sess):
         """
@@ -164,10 +153,9 @@ class CustomRunner(object):
                     generator = self.relationsOnlyDataGenerator()
                 else:
                     generator = self.dataGenerator()
-            for im_batch, triples_batch, flag_batch in generator:
+            for im_batch, triples_batch in generator:
                 feed_dict = {self.im_feats_placeholder : im_batch,\
-                             self.triples_placeholder : triples_batch,\
-                             self.flag_placeholder : flag_batch}
+                             self.triples_placeholder : triples_batch}
                 sess.run(self.enqueue_op, feed_dict = feed_dict)
 
 

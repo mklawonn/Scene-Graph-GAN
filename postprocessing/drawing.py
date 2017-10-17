@@ -97,7 +97,7 @@ if __name__ == "__main__":
             #Sort triples
             sorted_triples = triples[:]
             sorted_triples.sort(key=lambda x : x.disc_score, reverse=True)
-            sorted_triples = sorted_triples[:5]
+            sorted_triples = sorted_triples[:15]
 
 
             printable_triples = [i.decode() for i in sorted_triples]

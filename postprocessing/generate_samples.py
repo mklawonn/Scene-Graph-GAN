@@ -13,6 +13,8 @@ from train import SceneGraphWGAN
 #####################################################
 # Global Variables
 #####################################################
+decoder = {}
+entity_identifier = 0
 
 def init():
     global decoder
