@@ -2,7 +2,6 @@ import os, sys
 sys.path.append(os.getcwd())
 
 import json
-import argparse
 import gc
 
 from subprocess import call
@@ -34,21 +33,7 @@ def addAttributes(save_path):
     del attr_data, sg_dict
     gc.collect()
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("--visual_genome", default="./data/", help="The path to the visual genome data. Defaults to ./data")
-    parser.add_argument("--add_attributes", type=bool, default=False, help="Whether or not to add attributes to the scene graphs")
-
-    args = parser.parse_args()
-    params = vars(args)
-
-    path_to_data = params["visual_genome"]
-
-    #Unzip everything
-    unzipAll(path_to_data)
-    #Create an "all_images" directory
+def moveAll(path_to_data):
     all_images = os.path.join(path_to_data, "all_images")
     if not os.path.exists(all_images):
         os.makedirs(all_images)
@@ -57,7 +42,3 @@ if __name__ == "__main__":
         cwd = os.path.join(path_to_data, directory)
         for f in os.listdir(cwd):
             call(["mv", os.path.join(cwd, f), all_images])
-        
-    #Add attributes to scene graphs
-    if params["add_attributes"]:
-        addAttributes(path_to_data)

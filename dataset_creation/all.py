@@ -1,0 +1,44 @@
+import os, sys
+sys.path.append(os.getcwd())
+
+import argparse
+
+from grab_data import getVisualGenome, streamSaveLink
+from arrange_data import addAttributes, unzipAll, moveAll
+from calculate_image_mean import computeImageStats
+from map_files_to_triples import createVocab, mapFromImagesToTriples
+
+if __name__ == "__main__":
+
+    ##################################################
+    ## Argparse stuff                                #
+    ##################################################
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--visual_genome", default="./data/", help="The path to the visual genome data. Defaults to ./data")
+    parser.add_argument("--add_attributes", type=bool, default=True, help="Whether or not to add attributes to the scene graphs")
+    parser.add_argument("--path_to_artifacts", default="./dataset_creation", help="Path to store things like vocab, image means, etc")
+
+    args = parser.parse_args()
+    params = vars(args)
+
+    #if not os.path.exists(params["visual_genome"]):
+    #    os.makedirs(params["visual_genome"])
+
+    #getVisualGenome(params["visual_genome"])
+    #unzipAll(params["visual_genome"])
+    #moveAll(params["visual_genome"])
+
+    #if params["add_attributes"]: 
+    #    addAttributes(params["visual_genome"])
+
+    #computeImageStats(os.path.join(params["visual_genome"], "all_images"), params["path_to_artifacts"])
+
+    path_to_sgs = os.path.join(params["visual_genome"], "scene_graphs.json")
+    path_to_vocab = os.path.join(params["path_to_artifacts"], "vocab.json")
+    path_to_maps = os.path.join(params["path_to_artifacts"], "ims_to_triples.json")
+    path_to_images = os.path.join(params["visual_genome"], "all_images")
+
+    vocab = createVocab(path_to_sgs, path_to_vocab)
+    mapFromImagesToTriples(vocab, path_to_images, path_to_sgs, path_to_maps)
