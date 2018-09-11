@@ -1,179 +1,71 @@
+import sys
+
 import tensorflow as tf
 import numpy as np
 
 class Generator(object):
 
-    def __init__(self, vocab_size, context_shape=[196, 512], seq_len = 3, dim_hidden=512, dim_embed = 300, batch_size=64):
-        self.vocab_size = vocab_size
-        self.context_shape = context_shape
-        self.dim_hidden = dim_hidden
-        #self.batch_size = batch_size
-        self.seq_len = seq_len
-        self.noise_dim = context_shape[1]
-        self.dim_embed = dim_embed
-        self.soft_gumbel_temp = 0.9
+    def __init__(self):
 
-        self.attention_vectors = []
+    def build_generator(self, images, training):
+        bias_init = tf.constant_initializer(0.05)
+        kernel_init = tf.keras.initializers.he_normal()
+        regularizer = tf.contrib.layers.l2_regularizer(scale=0.01)
 
-        xavier_initializer = tf.contrib.layers.xavier_initializer()
-        constant_initializer = tf.constant_initializer(0.05)
-        alpha_initializer = tf.constant_initializer(1)
-        beta_initializer = tf.constant_initializer(0)
+        ################################################## 
+        # Convolutional Architecture
+        ################################################## 
+        #Block 1
+        conv1_1 = tf.layers.conv2d(inputs = images, filters=32, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        conv1_2 = tf.layers.conv2d(inputs = conv1_1, filters=32, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        batchnorm1_1 = tf.layers.batch_normalization(inputs = conv1_2, axis=-1, training=training)
 
-        #The weights for encoding the context to feed it into the attention MLP
-        #Needs to be encoded in order to combine it with the previous hidden state
-        self.context_encode_W = tf.get_variable("context_encode_W", [self.context_shape[0]*self.context_shape[1], self.context_shape[1]*2], initializer=xavier_initializer)
-        self.context_encode_b = tf.get_variable("context_encode_b", [self.context_shape[1]*2], initializer=constant_initializer)
+        #Downsample
+        conv1_3 = tf.layers.conv2d(inputs = batchnorm1_1, filters=32, kernel_size=[5,5], padding="same", strides=2, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
 
-        #self.noise_emb_W = tf.get_variable("noise_emb_W", [self.noise_dim, self.noise_dim], initializer=xavier_initializer)
-        #self.noise_emb_b = tf.get_variable("noise_emb_b", [self.noise_dim], initializer=constant_initializer)
+        #Block 2
+        conv2_1 = tf.layers.conv2d(inputs = conv1_3, filters=64, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        conv2_2 = tf.layers.conv2d(inputs = conv2_1, filters=64, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        batchnorm2_1 = tf.layers.batch_normalization(inputs = conv2_2, axis=-1, training=training)
+        #Block 2_2
+        conv2_3 = tf.layers.conv2d(inputs = batchnorm2_1, filters=128, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        conv2_4 = tf.layers.conv2d(inputs = conv2_3, filters=128, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        batchnorm2_2 = tf.layers.batch_normalization(inputs = conv2_4, axis=-1, training=training)
 
-        self.Wemb = tf.get_variable("Wemb", [self.vocab_size, self.dim_embed], initializer=xavier_initializer)
+        #Downsample
+        conv2_5 = tf.layers.conv2d(inputs = batchnorm2_2, filters=128, kernel_size=[5,5], padding="same", strides=2, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
 
-        #self.att_W = tf.get_variable("att_W", [(self.context_shape[1]*2)+self.dim_hidden+self.noise_dim, self.context_shape[0]], initializer=xavier_initializer)
-        #self.att_b = tf.get_variable("att_b", [self.context_shape[0]], initializer=constant_initializer)
-        self.att_W = tf.get_variable("att_W", [(self.context_shape[1]*2)+self.dim_hidden, self.context_shape[0]], initializer=xavier_initializer)
-        self.att_b = tf.get_variable("att_b", [self.context_shape[0]], initializer=constant_initializer)
+        #Block 3
+        conv3_1 = tf.layers.conv2d(inputs = conv2_5, filters=256, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        conv3_2 = tf.layers.conv2d(inputs = conv3_1, filters=256, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        batchnorm3_1 = tf.layers.batch_normalization(inputs = conv3_2, axis=-1, training=training)
+        #Block 3_2
+        conv3_3 = tf.layers.conv2d(inputs = batchnorm3_1, filters=512, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        conv3_4 = tf.layers.conv2d(inputs = conv3_3, filters=512, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        batchnorm3_2 = tf.layers.batch_normalization(inputs = conv3_4, axis=-1, training=training)
 
-        self.lstm_W = tf.get_variable("lstm_W", [self.context_shape[1]+self.dim_hidden+self.dim_embed+self.noise_dim, self.dim_hidden*4], initializer=xavier_initializer)
-        self.lstm_b = tf.get_variable("lstm_b", [self.dim_hidden*4], initializer=constant_initializer)
+        #Downsample
+        conv3_5 = tf.layers.conv2d(inputs = batchnorm3_2, filters=512, kernel_size=[5,5], padding="same", strides=2, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        
+        ################################################## 
+        # LSTM with Attention
+        ################################################## 
+        flattened_context = tf.reshape(conv3_5, [-1, conv3_5.get_shape()[1]*conv3_5.get_shape()[2]*conv3_5.get_shape()[3]])
+        partially_flattened_context = tf.reshape(conv3_5, [-1, conv_3_5.get_shape()[1]*conv3_5.get_shape()[2], conv3_5.get_shape()[3]])
+        lstm_cell = tf.contrib.rnn.LayerNormBasicLSTMCell(512)
 
-        self.init_hidden_W = tf.get_variable("init_hidden_W", [self.context_shape[1]+self.noise_dim, self.dim_hidden], initializer=xavier_initializer)
-        self.init_hidden_b = tf.get_variable("init_hidden_b", [self.dim_hidden], initializer=constant_initializer)
-
-        self.init_memory_W = tf.get_variable("init_memory_W", [self.context_shape[1]+self.noise_dim, self.dim_hidden], initializer=xavier_initializer)
-        self.init_memory_b = tf.get_variable("init_memory_b", [self.dim_hidden], initializer=constant_initializer)
-
-        #Uncomment these two lines for a shallow architecture
-        #self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.vocab_size], initializer=xavier_initializer)
-        #self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.vocab_size], initializer=constant_initializer)
-
-        #Uncomment the next four lines for a deep output layer
-        self.decode_lstm_W = tf.get_variable("decode_lstm_W", [self.dim_hidden, self.dim_embed], initializer=xavier_initializer)
-        self.decode_lstm_b = tf.get_variable("decode_lstm_b", [self.dim_embed], initializer=constant_initializer)
-
-        self.decode_word_W = tf.get_variable("decode_word_W", [self.dim_embed, self.vocab_size], initializer=xavier_initializer)
-        self.decode_word_b = tf.get_variable("decode_word_b", [self.vocab_size], initializer=constant_initializer)
-
-        #For layer normalization:
-        self.init_hidden_alpha = tf.get_variable("init_hidden/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
-        self.init_hidden_beta = tf.get_variable("init_hidden/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
-
-        self.init_memory_alpha = tf.get_variable("init_memory/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
-        self.init_memory_beta = tf.get_variable("init_memory/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
-
-        self.encoded_context_alpha = tf.get_variable("encoded_context/LN/alpha", shape=[self.context_shape[1]*2], initializer = alpha_initializer)
-        self.encoded_context_beta = tf.get_variable("encoded_context/LN/beta", shape=[self.context_shape[1]*2], initializer = beta_initializer)
-
-        self.i_alpha = tf.get_variable("i/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
-        self.i_beta = tf.get_variable("i/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
-
-        self.f_alpha = tf.get_variable("f/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
-        self.f_beta = tf.get_variable("f/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
-
-        self.o_alpha = tf.get_variable("o/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
-        self.o_beta = tf.get_variable("o/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
-
-        self.g_alpha = tf.get_variable("g/LN/alpha", shape=[self.dim_hidden], initializer = alpha_initializer)
-        self.g_beta = tf.get_variable("g/LN/beta", shape=[self.dim_hidden], initializer = beta_initializer)
-
-    def get_initial_lstm(self, context_and_noise):
-        #From the paper: "The initial memory state and hidden state of the LSTM are predicted by an average
-        #of the annotation vectors fed through two separate MLPs (init,c and init,h)"
-        #This is done via the mean_context ops
-        #context_and_noise = tf.concat([mean_context, noise], 1)
-        initial_hidden = tf.nn.tanh(tf.add(tf.matmul(context_and_noise, self.init_hidden_W), self.init_hidden_b))
-        initial_memory = tf.nn.tanh(tf.add(tf.matmul(context_and_noise, self.init_memory_W), self.init_memory_b))
-
-        return initial_hidden, initial_memory
-
-    def layer_normalization(self, inputs, scale, shift, epsilon = 1e-5):
-        mean, var = tf.nn.moments(inputs, [1], keep_dims = True)
-
-        normalized = scale * (inputs - mean) / tf.sqrt(var + epsilon) + shift
-        return normalized
-
-    def build_generator(self, context, batch_size):
-
-        flattened_context = tf.reshape(context, [-1, self.context_shape[0]*self.context_shape[1]])
-        encoded_context = tf.add(tf.matmul(flattened_context, self.context_encode_W), self.context_encode_b)
-        encoded_context = self.layer_normalization(encoded_context, self.encoded_context_alpha, self.encoded_context_beta)
-        #encoded_context = tf.nn.relu(encoded_context)
-
-        #Does different noise make a difference?
-        noise = tf.random_uniform([batch_size, self.noise_dim], minval=0, maxval=1)
-        #embedded_noise = tf.add(tf.matmul(noise, self.noise_emb_W), self.noise_emb_b)
-        #embedded_noise = tf.nn.relu(embedded_noise)
-
-
-        #h, c = self.get_initial_lstm(tf.reduce_mean(context, 1), noise)#(batch_size, dim_hidden + dim_noise)
-        context_and_noise = tf.concat([tf.reduce_mean(context, 1), noise], 1)
-
-        h, c = self.get_initial_lstm(context_and_noise)#(batch_size, dim_hidden)
-
-        l = []
-
-        for i in range(self.seq_len):
-            if i == 0:
-                #word_emb = tf.matmul(noise, self.zero_emb)
-                word_emb = tf.zeros([batch_size, self.dim_embed])
-            else:
-                word_emb = tf.nn.embedding_lookup(self.Wemb, word_prediction)
-                #word_emb = tf.matmul(word_prob, self.Wemb)
-
-
-            #context_hidden_state_and_noise = tf.concat([encoded_context, h, embedded_noise], 1)
-            context_hidden_state = tf.concat([encoded_context, h], 1)
-            #e = tf.add(tf.matmul(context_hidden_state_and_noise, self.att_W), self.att_b)
-            e = tf.add(tf.matmul(context_hidden_state, self.att_W), self.att_b)
+        #Initialize state
+        state = tf.reduce_mean(conv3_5, axis=(1,2))
+        outputs = []
+        for i in range(0, 3):
+            #Calculate attention
+            e = tf.layers.dense(inputs=flattened_context, units=conv3_5.get_shape()[1]*conv3_5.get_shape()[2], name="Attention perceptron", reuse=True)
             alpha = tf.nn.softmax(e, name="attention_softmax")
-            self.attention_vectors.append(alpha)
-            z_hat = tf.reduce_sum(tf.multiply(context, tf.expand_dims(alpha, 2)), axis = 1) #Output is [batch size, D]
-            #Concatenate \hat{z}_t , h_{t-1}, and the embedding of the previous word 
-            #Also now trying to add in the noise here as opposed to in the attention model
-            #with the intuition being that we want to look in a slightly random place, but
-            #also then say varying things about that place
-            #lstm_input = tf.concat([z_hat, h, word_emb, embedded_noise, flag], 1)
-            lstm_input = tf.concat([z_hat, h, word_emb, noise], 1)
-            #Perform affine transformation of concatenated vector
-            affine = tf.add(tf.matmul(lstm_input, self.lstm_W), self.lstm_b)
-            i, f, o, g = tf.split(affine, 4, 1)
-            #i_t = sigmoid(affine)
-            i = self.layer_normalization(i, self.i_alpha, self.i_beta)
-            i = tf.nn.sigmoid(i)
-            #f_t = sigmoid(affine)
-            f = self.layer_normalization(f, self.f_alpha, self.f_beta)
-            f = tf.nn.sigmoid(f)
-            #o_t = sigmoid(affine)
-            o = self.layer_normalization(o, self.o_alpha, self.o_beta)
-            o = tf.nn.sigmoid(o)
-            #g_t = tanh(affine)
-            g = self.layer_normalization(g, self.g_alpha, self.g_beta)
-            g = tf.nn.tanh(g)
+            print alpha 
+            sys.exit(1)
+            z_hat = tf.reduce_sum(tf.multiply(partially_flattened_context, tf.expand_dims(alpha, 2)), axis=1)
+            #Feed dynamic z_hat into lstm cell
+            output, state = lstm_cell.__call__(z_hat, state)
+            outputs.append(output)
 
-            #Equation (2)
-            #c_t = f_t * c_{t-1} + i_t * g_t
-            c = f * c + i * g
-            #h_t = o_t * tanh(c_t)
-            h = o * tf.nn.tanh(c)
-
-            #Could make the decoding a "deep output layer" by adding another layer
-            out_word_embedding = tf.add(tf.matmul(h, self.decode_lstm_W), self.decode_lstm_b)
-            vocab_logits = tf.add(tf.matmul(out_word_embedding, self.decode_word_W), self.decode_word_b)
-            #logit_words = tf.add(tf.matmul(logits, self.decode_word_W), self.decode_word_b)
-            word_prob = tf.nn.softmax(vocab_logits)
-            word_prediction = tf.argmax(word_prob, 1)
-            l.append(word_prob)
-
-
-        word_probs = tf.stack(l)
-        #We want it in shape [batch_size, seq_len, vocab_size]
-        word_probs = tf.transpose(word_probs, [1,0,2], "generator_output")
-        return word_probs
-
-
-if __name__ == "__main__":
-    batch_size = 64
-    context = np.zeros((batch_size, 196, 512), dtype=np.float32)
-    g = Generator(8000)
-    print g.build_generator(context)
+        return outputs

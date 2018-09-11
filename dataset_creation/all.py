@@ -23,22 +23,29 @@ if __name__ == "__main__":
     args = parser.parse_args()
     params = vars(args)
 
-    #if not os.path.exists(params["visual_genome"]):
-    #    os.makedirs(params["visual_genome"])
+    if not os.path.exists(params["visual_genome"]):
+        os.makedirs(params["visual_genome"])
 
-    #getVisualGenome(params["visual_genome"])
-    #unzipAll(params["visual_genome"])
-    #moveAll(params["visual_genome"])
+    print "Downloading"
+    getVisualGenome(params["visual_genome"])
+    print "Unzipping"
+    unzipAll(params["visual_genome"])
+    print "Rearranging"
+    moveAll(params["visual_genome"])
 
-    #if params["add_attributes"]: 
-    #    addAttributes(params["visual_genome"])
+    print "Adding attributes"
+    if params["add_attributes"]: 
+        addAttributes(params["visual_genome"])
 
-    #computeImageStats(os.path.join(params["visual_genome"], "all_images"), params["path_to_artifacts"])
+    print "Computing image stats"
+    computeImageStats(os.path.join(params["visual_genome"], "all_images"), params["path_to_artifacts"])
 
     path_to_sgs = os.path.join(params["visual_genome"], "scene_graphs.json")
     path_to_vocab = os.path.join(params["path_to_artifacts"], "vocab.json")
     path_to_maps = os.path.join(params["path_to_artifacts"], "ims_to_triples.json")
     path_to_images = os.path.join(params["visual_genome"], "all_images")
 
+    print "Creating Vocab"
     vocab = createVocab(path_to_sgs, path_to_vocab)
+    print "Creating map"
     mapFromImagesToTriples(vocab, path_to_images, path_to_sgs, path_to_maps)

@@ -1,4 +1,3 @@
-#TODO Imports
 import os, sys
 sys.path.append(os.getcwd())
 
@@ -9,7 +8,11 @@ import tensorflow as tf
 import numpy as np
 
 from sklearn.utils import shuffle
+from subprocess import call
 from tqdm import tqdm
+
+from architectures.generator_with_attention import Generator
+from architectures.discriminator_with_attention import Discriminator
 
 class SceneGraphGAN(object):
 
@@ -43,14 +46,36 @@ class SceneGraphGAN(object):
         if not os.path.exists(self.summaries_dir):
             os.makedirs(self.summaries_dir)
 
+        for f in os.listdir(self.summaries_dir):
+            call(["rm", os.path.join(self.summaries_dir, f)])
+        for f in os.listdir(self.checkpoints_dir):
+            call(["rm", os.path.join(self.checkpoints_dir, f)])
+
         with open(path_to_ims_to_triples, "r") as f:
             self.ims_to_triples = json.load(f)
 
         with open(path_to_vocab, "r") as f:
             self.vocab = json.load(f)
+
         self.reverse_vocab = {y:x for x,y in self.vocab.iteritems()}
 
+        with tf.variable_scope("Generator") as scope:
+            self.g = Generator(len(self.vocab))
+
+        with tf.variable_scope("Discriminator") as scope:
+            self.d = Discriminator(len(self.vocab))
+
         self._loadImageMeans()
+
+    def _Generator(self, images, training):
+        with tf.variable_scope("Generator", reuse=True) as scope:
+            generated_triple = self.g.build_generator(images, training)
+            return generated_triple
+
+    def _Discriminator(self, triple_input, images):
+        with tf.variable_scope("Discriminator", reuse=True) as scope:
+            logits = self.d.build_discriminator(images, triple_input)
+            return logits
 
     def _loadImageMeans(self):
         image_means = []
@@ -181,48 +206,27 @@ class SceneGraphGAN(object):
         self.training_placeholder = tf.placeholder(tf.bool, shape=[])
 
         fake_inputs = self.Generator(self.next_images, self.training_placeholder)
+        sys.exit(1)
         #fake_inputs_discrete = tf.argmax(fake_inputs, fake_inputs.get_shape().ndims-1)
                                                                                                                                                                  
         self.fake_inputs = fake_inputs
                                                                                                                                                                  
-        disc_real = self.Discriminator(self.next_labels, self.next_images, self.batch_size_placeholder)
-        disc_fake = self.Discriminator(fake_inputs, self.next_images, self.batch_size_placeholder)
-                                                                                                                                                                 
-        #First get the average loss over each timestep
-        disc_cost = tf.reduce_mean(disc_fake - disc_real, axis=1)
-        gen_cost = -tf.reduce_mean(disc_fake, axis=1)
-                                                                                                                                                                 
-        #Then get the loss over the batch
-        disc_cost = tf.reduce_mean(disc_cost)
-        gen_cost = tf.reduce_mean(gen_cost)
-                                                                                                                                                                 
-        tf.summary.scalar("Discriminator Cost", disc_cost)
-        tf.summary.scalar("Generator Cost", gen_cost)
-                                                                                                                                                                 
-        # WGAN lipschitz-penalty
-        alpha = tf.random_uniform(
-            shape=[self.batch_size_placeholder,1,1], 
-            minval=0.,
-            maxval=1.
-        )
+        #TODO Uncomment this to test the loss functions
+        #gen_cost = tf.contrib.gan.losses.wargs.wasserstein_generator_loss(
+        #    disc_fake)
 
-        differences = fake_inputs - self.real_inputs
-        interpolates = self.real_inputs + (alpha*differences)
-        gradients = tf.gradients(self.Discriminator(interpolates, self.image_feats, self.batch_size_placeholder, self.attribute_or_relation), [interpolates])[0]
-        slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
-        gradient_penalty = tf.reduce_mean((slopes-1.)**2)
-        disc_cost += self.LAMBDA*gradient_penalty
-                                                                                                                                                                 
-        self.disc_cost = disc_cost
-        self.gen_cost = gen_cost
-                                                                                                                                                                 
-        train_variables = tf.trainable_variables()
-        gen_params = [v for v in train_variables if v.name.startswith("Generator")]
-        disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
+        #disc_cost = tf.contrib.gan.losses.wargs.wassertein_gradient_penalty(
+        #        self.next_labels, self.fake_inputs, self.next_images,\
+        #        self.discriminator_function, "Discriminator", one_sided=True
+        #    )
+        #                                                                                                                                                                 
+        #train_variables = tf.trainable_variables()
+        #gen_params = [v for v in train_variables if v.name.startswith("Generator")]
+        #disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
 
-        #Optimizer
-        self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Generator_Adam").minimize(gen_cost, var_list=gen_params)
-        self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Discriminator_Adam").minimize(disc_cost, var_list=disc_params)
+        ##Optimizer
+        #self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Generator_Adam").minimize(gen_cost, var_list=gen_params)
+        #self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Discriminator_Adam").minimize(disc_cost, var_list=disc_params)
 
     ############################################################
     ## Saving and Testing
