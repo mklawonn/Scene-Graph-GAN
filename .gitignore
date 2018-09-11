@@ -7,3 +7,4 @@ tensorflow_venv/*
 preprocessing/saved_data/*
 *.swp
 *.pyc
+*.json
