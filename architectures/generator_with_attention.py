@@ -1,13 +1,16 @@
-import sys
+import os, sys
+sys.path.append(os.getcwd())
+
 
 import tensorflow as tf
 import numpy as np
 
 class Generator(object):
 
-    def __init__(self):
+    def __init__(self, vocab_size):
+        self.vocab_size = vocab_size
 
-    def build_generator(self, images, training):
+    def build_generator(self, images, is_training=True):
         bias_init = tf.constant_initializer(0.05)
         kernel_init = tf.keras.initializers.he_normal()
         regularizer = tf.contrib.layers.l2_regularizer(scale=0.01)

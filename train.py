@@ -151,9 +151,11 @@ class SceneGraphGAN(object):
         d = d.apply(tf.contrib.data.map_and_batch(
                 map_func=self._parseFunction, batch_size=tf.cast(self.batch_size_placeholder, dtype=tf.int64), num_parallel_batches=2))
 
-        if train:
-            d = d.flat_map(
-                    lambda x, y: tf.data.Dataset.from_tensors((x, y)).repeat(self.CRITIC_ITERS + 1))
+        #Shouldn't be necessary anymore since I can specify
+        #The number of critic iters to run
+        #if train:
+        #    d = d.flat_map(
+        #            lambda x, y: tf.data.Dataset.from_tensors((x, y)).repeat(self.CRITIC_ITERS + 1))
 
         iterator = d.make_initializable_iterator()
         return d, iterator
@@ -199,34 +201,40 @@ class SceneGraphGAN(object):
     ## Graph construction
     ############################################################
     def _constructOps(self):
-        #Use self.next_images and self.next_labels
-        #TODO Load Architectures
-        #TODO WGAN Objective
-        #TODO Test operation calculations
+        #TODO Testing operation calculations
+        self.global_step = tf.train.get_or_create_global_step()
+
         self.training_placeholder = tf.placeholder(tf.bool, shape=[])
 
-        fake_inputs = self.Generator(self.next_images, self.training_placeholder)
+        fake_inputs = self._Generator(self.next_images, self.training_placeholder)
+
         sys.exit(1)
-        #fake_inputs_discrete = tf.argmax(fake_inputs, fake_inputs.get_shape().ndims-1)
-                                                                                                                                                                 
-        self.fake_inputs = fake_inputs
-                                                                                                                                                                 
-        #TODO Uncomment this to test the loss functions
-        #gen_cost = tf.contrib.gan.losses.wargs.wasserstein_generator_loss(
-        #    disc_fake)
 
-        #disc_cost = tf.contrib.gan.losses.wargs.wassertein_gradient_penalty(
-        #        self.next_labels, self.fake_inputs, self.next_images,\
-        #        self.discriminator_function, "Discriminator", one_sided=True
-        #    )
-        #                                                                                                                                                                 
-        #train_variables = tf.trainable_variables()
-        #gen_params = [v for v in train_variables if v.name.startswith("Generator")]
-        #disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
+        wgan_model = tf.contrib.gan.gan_model(
+                        self._Generator,
+                        self._Discriminator,
+                        real_data = self.next_labels,
+                        generator_inputs = self.next_images)
 
-        ##Optimizer
-        #self.gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Generator_Adam").minimize(gen_cost, var_list=gen_params)
-        #self.disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Discriminator_Adam").minimize(disc_cost, var_list=disc_params)
+        improved_wgan_loss = tf.contrib.gan.gan_loss(
+                        wgan_model,
+                        generator_loss_fn = tf.contrib.gan.losses.wasserstein_generator_loss,
+                        discriminator_loss_fn = tf.contrib.gan.losses.wasserstein_discriminator_loss,
+                        gradient_penalty_weights = self.LAMBDA,
+                        gradient_penalty_one_sides = True)
+
+        self.generator_optimizer =  tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Generator_Adam") 
+        self.discriminator_optimizer =  tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Discriminator_Adam") 
+
+        self.gan_train_ops = tf.contrib.gan.gan_train_ops(
+            wgan_model,
+            improved_wgan_loss,
+            self.generator_optimizer,
+            self.discriminator_optimizer)
+
+        self.train_steps = tf.contrib.gan.GANTrainSteps(1, self.CRITIC_ITERS)
+
+        self.train_fn = tf.contrib.gan.get_sequential_train_steps(self.train_steps)
 
     ############################################################
     ## Saving and Testing
@@ -248,13 +256,9 @@ class SceneGraphGAN(object):
     ############################################################
 
     def train(self):
-
+        
         with tf.Session() as sess:
-            train_writer = tf.summary.FileWriter(self.summaries_dir, sess.graph)
-
-            print "Loading Datasets"
             train_handle, val_handle = self._loadDatasets(sess)
-            print "Constructing Graph"
             self._constructOps()
 
             if self.resume:
@@ -262,28 +266,13 @@ class SceneGraphGAN(object):
             else:
                 init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
                 sess.run(init)
-            
-            print "Starting training"
+
             pbar = tqdm(range(self.max_iterations))
             pbar.set_postfix(mode="Train")
+
             for itr in pbar:
-                for i in range(self.CRITIC_ITERS):
-                    try:
-                        sess.run(self.disc_train_op, feed_dict = {self.training_placeholder : True, self.feedable_handle : train_handle})
-                    except:
-                        break
-
-                sess.run(self.gen_train_op, feed_dict = {self.training_placeholder : True, self.feedable_handle : train_handle})
-                if itr % self.write_iterations == 0:
-                    pbar.set_postfix(mode="Val")
-                    #merged = sess.run(self.merged, feed_dict = {self.training_placeholder : False, self.feedable_handle : val_handle})
-                    #train_writer.add_summary(merged, itr)
-                    pbar.set_postfix(mode="Train")
-
-                if itr % self.test_iterations == self.test_iterations - 1:
-                    pbar.set_postfix(mode="Test")
-                    self.test(sess)
-                    pbar.set_postfix(mode="Train")
+                current_loss, _ = self.train_fn(sess, self.gan_train_ops, self.global_step,\
+                     feed_dict = {self.feedable_handle : train_handle, self.training_placeholder : True})
 
 
 if __name__ == "__main__":
