@@ -23,19 +23,19 @@ if __name__ == "__main__":
     args = parser.parse_args()
     params = vars(args)
 
-    if not os.path.exists(params["visual_genome"]):
-        os.makedirs(params["visual_genome"])
+    #if not os.path.exists(params["visual_genome"]):
+    #    os.makedirs(params["visual_genome"])
 
-    print "Downloading"
-    getVisualGenome(params["visual_genome"])
-    print "Unzipping"
-    unzipAll(params["visual_genome"])
-    print "Rearranging"
-    moveAll(params["visual_genome"])
+    #print "Downloading"
+    #getVisualGenome(params["visual_genome"])
+    #print "Unzipping"
+    #unzipAll(params["visual_genome"])
+    #print "Rearranging"
+    #moveAll(params["visual_genome"])
 
-    print "Adding attributes"
-    if params["add_attributes"]: 
-        addAttributes(params["visual_genome"])
+    #print "Adding attributes"
+    #if params["add_attributes"]: 
+    #    addAttributes(params["visual_genome"])
 
     print "Computing image stats"
     computeImageStats(os.path.join(params["visual_genome"], "all_images"), params["path_to_artifacts"])

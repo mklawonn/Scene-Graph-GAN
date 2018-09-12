@@ -11,12 +11,12 @@ def computeImageStats(path_to_images, path_to_means):
     path_to_means = os.path.join(path_to_means, "image_means.txt")
     means = []
     stds = []
-    if os.path.exists("./image_means.txt"):
-        with open("./image_means.txt", "r") as f:
+    if os.path.exists(path_to_means):
+        with open(path_to_means, "r") as f:
             for line in f:
                 means.append(float(line.strip()))
 
-        with open("./image_stds.txt", "r") as f:
+        with open(path_to_stds, "r") as f:
             for line in f:
                 stds.append(float(line.strip()))
         return means, stds
@@ -35,10 +35,12 @@ def computeImageStats(path_to_images, path_to_means):
 
     for i, file_ in tqdm(enumerate(all_files), total=len(all_files)):
         try:
-            image = cv2.cvtColor(cv2.imread(file_), cv2.COLOR_BGR2RGB)
+            image = cv2.imread(file_)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         except Exception as e:
             print e
             continue
+
         im = np.asarray(image)
         #Welford's algorithm
         new_r = np.mean(im[:,:,0])
@@ -59,6 +61,7 @@ def computeImageStats(path_to_images, path_to_means):
         delta2_b = new_b - b_mean
         b_var = b_var + (delta_b * delta2_b)
 
+
     r_var = r_var / float(len(all_files))
     g_var = g_var / float(len(all_files))
     b_var = b_var / float(len(all_files))
@@ -67,11 +70,11 @@ def computeImageStats(path_to_images, path_to_means):
     g_std = np.sqrt(g_var)
     b_std = np.sqrt(b_var)
 
-    with open("./image_means.txt", "w") as f:
+    with open(path_to_means, "w") as f:
         f.write("{}\n".format(r_mean))
         f.write("{}\n".format(g_mean))
         f.write("{}\n".format(b_mean))
-    with open("./image_stds.txt", "w") as f:
+    with open(path_to_stds, "w") as f:
         f.write("{}\n".format(r_std))
         f.write("{}\n".format(g_std))
         f.write("{}\n".format(b_std))

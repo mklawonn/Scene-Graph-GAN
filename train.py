@@ -67,14 +67,14 @@ class SceneGraphGAN(object):
 
         self._loadImageMeans()
 
-    def _Generator(self, images, training):
-        with tf.variable_scope("Generator", reuse=True) as scope:
-            generated_triple = self.g.build_generator(images, training)
+    def _Generator(self, images, is_training):
+        with tf.variable_scope("Generator", reuse=tf.AUTO_REUSE) as scope:
+            generated_triple = self.g.build_generator(images, is_training)
             return generated_triple
 
-    def _Discriminator(self, triple_input, images):
-        with tf.variable_scope("Discriminator", reuse=True) as scope:
-            logits = self.d.build_discriminator(images, triple_input)
+    def _Discriminator(self, triple_input, images, is_training):
+        with tf.variable_scope("Discriminator", reuse=tf.AUTO_REUSE) as scope:
+            logits = self.d.build_discriminator(images, triple_input, is_training)
             return logits
 
     def _loadImageMeans(self):
@@ -206,9 +206,9 @@ class SceneGraphGAN(object):
 
         self.training_placeholder = tf.placeholder(tf.bool, shape=[])
 
-        fake_inputs = self._Generator(self.next_images, self.training_placeholder)
-
-        sys.exit(1)
+        #fake_inputs = self._Generator(self.next_images, self.training_placeholder)
+        disc_real = self.Discriminator(self.next_labels, self.next_images, self.training_placeholder)
+        sys.exit(0)
 
         wgan_model = tf.contrib.gan.gan_model(
                         self._Generator,
