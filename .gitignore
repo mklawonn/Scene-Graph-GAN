@@ -6,6 +6,7 @@ tensorflow_venv/
 tensorflow_venv/*
 preprocessing/saved_data/*
 dataset_creation/*.txt
+dataset_creation/*.npy
 *.swp
 *.pyc
 *.json

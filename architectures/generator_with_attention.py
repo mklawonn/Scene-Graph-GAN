@@ -10,10 +10,9 @@ class Generator(object):
     def __init__(self, vocab_size):
         self.vocab_size = vocab_size
 
-    #TODO Attention mechanism should accept as input the last state of the
-    #LSTM too
-    def attentionMechanism(self):
-        e = tf.layers.dense(inputs = self.flattened_context, units=self.conv3_5.get_shape()[1]*self.conv3_5.get_shape()[2], name="attention_perceptron", reuse=tf.AUTO_REUSE)
+    def attentionMechanism(self, cell_state):
+        context_and_state = tf.concat([self.flattened_context, cell_state[0]], axis=1)
+        e = tf.layers.dense(inputs = context_and_state, units=self.conv3_5.get_shape()[1]*self.conv3_5.get_shape()[2], name="attention_perceptron", reuse=tf.AUTO_REUSE)
         self.alpha = tf.nn.softmax(e, name="attention_softmax")
         z_hat = tf.reduce_sum(tf.multiply(self.partially_flattened_context, tf.expand_dims(self.alpha, 2)), axis=1)
         return z_hat
@@ -22,11 +21,11 @@ class Generator(object):
         emit_output = cell_output
         if cell_output is None:
             next_cell_state = self.cell_init_state
-            next_input = self.attentionMechanism()
+            next_input = self.attentionMechanism(next_cell_state)
             
         else:
             next_cell_state = cell_state
-            next_input = self.attentionMechanism()
+            next_input = self.attentionMechanism(next_cell_state)
 
         next_loop_state = None
         elements_finished = (time >= 3)

@@ -3,14 +3,60 @@ sys.path.append(os.getcwd())
 
 import json
 import argparse
+import struct
+import numpy as np
+import copy
 
 from tqdm import tqdm
+
+#Inspired by https://gist.github.com/ottokart/673d82402ad44e69df85
+def loadWordEmbeddings(path_to_word_embeddings, word_embeddings_out_path, word_vocab):
+    with open(path_to_word_embeddings, "rb") as f:
+        #Read in header
+        header = ""
+        c = None
+        while c != "\n":
+            c = f.read(1)
+            header += c
+
+        #word_embeddings_matrix = np.zeros((len(word_vocab), int(header.split()[1])), dtype=np.float64)
+        word_embeddings_matrix = np.random.uniform(low = -0.1, high = 0.1, size=(len(word_vocab), int(header.split()[1])))
+        #print len(word_vocab)
+        #print max([y for x, y in word_vocab.iteritems()])
+        
+        counter = 0
+        for i in xrange(int(header.split()[0])):
+            word = ""
+            while True:
+                c = f.read(1)
+                if c == " ":
+                    break
+                word += c
+            if word not in word_vocab:
+                f.read(4*word_embeddings_matrix.shape[1])
+                continue
+            #The correct index will be determined by the word vocabulary
+            #The "4" comes from floats being 4 bytes long
+            binary_vector = f.read(4*word_embeddings_matrix.shape[1])
+            word_embeddings_matrix[word_vocab[word]] = [struct.unpack_from('f', binary_vector, j)[0]\
+                                                for j in xrange(0, len(binary_vector), 4)]
+            #Break out of the loop once all the words you're looking for
+            #have been found.
+            counter += 1
+            if counter == word_embeddings_matrix.shape[0]:
+                break
+    #zeros_vec = np.zeros((int(header.split()[1])), dtype=np.float64)
+    ##Remove all entries in the matrix that were never touched
+    #word_embeddings_matrix = word_embeddings_matrix[np.where(word_embeddings_matrix != zeros_vec)].reshape((-1, int(header.split()[1]))) 
+    np.save(word_embeddings_out_path, word_embeddings_matrix)
+    return word_embeddings_matrix
+
 
 def createVocab(path_to_scene_graphs, vocab_out_path):
     with open(path_to_scene_graphs, "r") as f:
         sgs = json.load(f)
 
-    threshold = 50
+    threshold = 100
     vocab = {}
     counts = {}
     vocab["be"] = 0

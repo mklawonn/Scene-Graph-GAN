@@ -20,8 +20,8 @@ class SceneGraphGAN(object):
     ############################################################
     ## All init methods
     ############################################################
-    def __init__(self, checkpoints_dir, summaries_dir, path_to_ims_to_triples, path_to_vocab, path_to_image_means, path_to_image_stds,\
-                critic_iters, batch_size, lambda_,resume):
+    def __init__(self, checkpoints_dir, summaries_dir, path_to_ims_to_triples, path_to_vocab, path_to_word_embeddings,\
+                path_to_image_means, path_to_image_stds, critic_iters, batch_size, lambda_,resume):
 
         #Hyperparameters
         self.CRITIC_ITERS = critic_iters
@@ -57,24 +57,29 @@ class SceneGraphGAN(object):
         with open(path_to_vocab, "r") as f:
             self.vocab = json.load(f)
 
+        self.embeddings = np.load(path_to_word_embeddings)
+
         self.reverse_vocab = {y:x for x,y in self.vocab.iteritems()}
 
         with tf.variable_scope("Generator") as scope:
             self.g = Generator(len(self.vocab))
 
         with tf.variable_scope("Discriminator") as scope:
-            self.d = Discriminator(len(self.vocab))
+            self.embedding_placeholder = tf.placeholder(tf.float32, self.embeddings.shape)
+            W = tf.Variable(tf.constant(0.0, shape=self.embeddings.shape), trainable=True, name="W")
+            self.embedding_init = W.assign(self.embedding_placeholder)
+            self.d = Discriminator(len(self.vocab), W)
 
         self._loadImageMeans()
 
-    def _Generator(self, images, is_training):
+    def _Generator(self, images, is_training=True):
         with tf.variable_scope("Generator", reuse=tf.AUTO_REUSE) as scope:
             generated_triple = self.g.build_generator(images, is_training)
             return generated_triple
 
-    def _Discriminator(self, triple_input, images, is_training):
+    def _Discriminator(self, triple_input, images, is_training=True):
         with tf.variable_scope("Discriminator", reuse=tf.AUTO_REUSE) as scope:
-            logits = self.d.build_discriminator(images, triple_input, is_training)
+            logits = self.d.build_discriminator(triple_input, images, is_training)
             return logits
 
     def _loadImageMeans(self):
@@ -147,9 +152,10 @@ class SceneGraphGAN(object):
             d = d.repeat()
             d = d.shuffle(buffer_size=tf.cast(self.batch_size_placeholder*10, dtype=tf.int64))
 
-        d = d.prefetch(buffer_size=tf.cast(self.batch_size_placeholder, dtype=tf.int64))
         d = d.apply(tf.contrib.data.map_and_batch(
                 map_func=self._parseFunction, batch_size=tf.cast(self.batch_size_placeholder, dtype=tf.int64), num_parallel_batches=2))
+
+        d = d.prefetch(buffer_size=tf.cast(self.batch_size_placeholder*4, dtype=tf.int64))
 
         #Shouldn't be necessary anymore since I can specify
         #The number of critic iters to run
@@ -207,8 +213,7 @@ class SceneGraphGAN(object):
         self.training_placeholder = tf.placeholder(tf.bool, shape=[])
 
         #fake_inputs = self._Generator(self.next_images, self.training_placeholder)
-        disc_real = self.Discriminator(self.next_labels, self.next_images, self.training_placeholder)
-        sys.exit(0)
+        #disc_real = self._Discriminator(self.next_labels, self.next_images, self.training_placeholder)
 
         wgan_model = tf.contrib.gan.gan_model(
                         self._Generator,
@@ -220,8 +225,8 @@ class SceneGraphGAN(object):
                         wgan_model,
                         generator_loss_fn = tf.contrib.gan.losses.wasserstein_generator_loss,
                         discriminator_loss_fn = tf.contrib.gan.losses.wasserstein_discriminator_loss,
-                        gradient_penalty_weights = self.LAMBDA,
-                        gradient_penalty_one_sides = True)
+                        gradient_penalty_weight = self.LAMBDA,
+                        gradient_penalty_one_sided = True)
 
         self.generator_optimizer =  tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Generator_Adam") 
         self.discriminator_optimizer =  tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Discriminator_Adam") 
@@ -266,6 +271,8 @@ class SceneGraphGAN(object):
             else:
                 init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
                 sess.run(init)
+                sess.run(self.embedding_init, feed_dict={self.embedding_placeholder : self.embeddings})
+                del self.embeddings
 
             pbar = tqdm(range(self.max_iterations))
             pbar.set_postfix(mode="Train")
@@ -287,6 +294,7 @@ if __name__ == "__main__":
     parser.add_argument("--summaries_dir", help="Where to write the logs", default="./logs")
     parser.add_argument("--path_to_ims_to_triples", help="Path to the map from image files to triples", default="./dataset_creation/ims_to_triples.json")
     parser.add_argument("--path_to_vocab", help="Path to the vocabulary", default = "./dataset_creation/vocab.json")
+    parser.add_argument("--path_to_word_embeddings", help="Path to the word embeddings", default = "./dataset_creation/word_embeddings.npy")
     parser.add_argument("--path_to_image_means", help="Path to the image means", default="./dataset_creation/image_means.txt")
     parser.add_argument("--path_to_image_stds", help="Path to the image stds", default="./dataset_creation/image_stds.txt")
 
@@ -303,6 +311,6 @@ if __name__ == "__main__":
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = "{}".format(params["GPU"])
 
-    gan = SceneGraphGAN(params["checkpoints_dir"], params["summaries_dir"], params["path_to_ims_to_triples"], params["path_to_vocab"],\
+    gan = SceneGraphGAN(params["checkpoints_dir"], params["summaries_dir"], params["path_to_ims_to_triples"], params["path_to_vocab"], params["path_to_word_embeddings"],\
                      params["path_to_image_means"], params["path_to_image_stds"], params["batch_size"], params["critic_iters"], params["lambda"], params["resume"])
     gan.train()

@@ -1,31 +1,34 @@
 import os
+import sys
 import tensorflow as tf
 import numpy as np
 
 
 class Discriminator(object):
 
-    def __init__(self, vocab_size):
+    def __init__(self, vocab_size, embedding_matrix):
         self.vocab_size = vocab_size
+        self.embedding_matrix = embedding_matrix
 
-    #TODO Attention mechanism should accept as input the last state of the
-    #LSTM too
-    def attentionMechanism(self):
-        e = tf.layers.dense(inputs = self.flattened_context, units=self.conv3_5.get_shape()[1]*self.conv3_5.get_shape()[2], name="attention_perceptron", reuse=tf.AUTO_REUSE)
+    def attentionMechanism(self, cell_state):
+        context_and_state = tf.concat([self.flattened_context, cell_state[0]], axis=1)
+        e = tf.layers.dense(inputs = context_and_state, units=self.conv3_5.get_shape()[1]*self.conv3_5.get_shape()[2], name="attention_perceptron", reuse=tf.AUTO_REUSE)
         self.alpha = tf.nn.softmax(e, name="attention_softmax")
         z_hat = tf.reduce_sum(tf.multiply(self.partially_flattened_context, tf.expand_dims(self.alpha, 2)), axis=1)
         return z_hat
 
     def loopFn(self, time, cell_output, cell_state, loop_state):
         emit_output = cell_output
+
         if cell_output is None:
             next_cell_state = self.cell_init_state
-            #TODO
-            next_input = tf.concat(self.attentionMechanism(), #Concat with the word embedding for this token)
-            
         else:
             next_cell_state = cell_state
-            next_input = self.attentionMechanism()
+
+        indices = self.input_triples[:, time-1, :]
+        print indices
+        embedding = tf.matmul(indices, self.embedding_matrix)
+        next_input = tf.concat([self.attentionMechanism(self.cell_init_state), embedding], axis=1)
 
         next_loop_state = None
         elements_finished = (time >= 3)
@@ -37,6 +40,8 @@ class Discriminator(object):
         bias_init = tf.constant_initializer(0.05)
         kernel_init = tf.keras.initializers.he_normal()
         regularizer = tf.contrib.layers.l2_regularizer(scale=0.01)
+
+        self.input_triples = input_triples
 
         ################################################## 
         # Convolutional Architecture
@@ -73,18 +78,23 @@ class Discriminator(object):
         #Downsample
         self.conv3_5 = tf.layers.conv2d(inputs = batchnorm3_2, filters=512, kernel_size=[5,5], padding="same", strides=2, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
 
-        #TODO Define word embedding layer for the triple
-
         ################################################## 
         # Process input triples with LSTM
         ################################################## 
         self.flattened_context = tf.reshape(self.conv3_5, [-1, self.conv3_5.get_shape()[1]*self.conv3_5.get_shape()[2]*self.conv3_5.get_shape()[3]])
         self.partially_flattened_context = tf.reshape(self.conv3_5, [-1, self.conv3_5.get_shape()[1]*self.conv3_5.get_shape()[2], self.conv3_5.get_shape()[3]])
-        #TODO
-        self.cell_init_state = 
+        #TODO Should this also incorporate the triple somehow?
+        self.cell_init_state = tf.reduce_mean(self.conv3_5, axis=(1,2))
+        self.cell_init_state = tf.contrib.rnn.LSTMStateTuple(self.cell_init_state, self.cell_init_state)
+        
         #LSTM receives as input at each timestep z_hat concat with
         #the triple input at that timestep
+        lstm_cell = tf.contrib.rnn.LayerNormBasicLSTMCell(512)
 
-        ################################################## 
-        # Discriminator Logits
-        ################################################## 
+        outputs_ta, final_state, decoded_logits = tf.nn.raw_rnn(lstm_cell, self.loopFn, swap_memory=True)
+
+        lstm_outputs = tf.transpose(outputs_ta.stack(), perm=[1,0,2])
+
+        discriminator_logits = tf.layers.dense(inputs = lstm_outputs, units=1, name="decoder", reuse=tf.AUTO_REUSE)
+
+        return discriminator_logits
