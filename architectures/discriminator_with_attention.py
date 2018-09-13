@@ -17,31 +17,10 @@ class Discriminator(object):
         z_hat = tf.reduce_sum(tf.multiply(self.partially_flattened_context, tf.expand_dims(self.alpha, 2)), axis=1)
         return z_hat
 
-    def loopFn(self, time, cell_output, cell_state, loop_state):
-        emit_output = cell_output
-
-        if cell_output is None:
-            next_cell_state = self.cell_init_state
-        else:
-            next_cell_state = cell_state
-
-        indices = self.input_triples[:, time-1, :]
-        print indices
-        embedding = tf.matmul(indices, self.embedding_matrix)
-        next_input = tf.concat([self.attentionMechanism(self.cell_init_state), embedding], axis=1)
-
-        next_loop_state = None
-        elements_finished = (time >= 3)
-        finished = tf.reduce_all(elements_finished)
-        return (elements_finished, next_input, next_cell_state, emit_output, next_loop_state)
-
-        
     def build_discriminator(self, input_triples, images, is_training=True):
         bias_init = tf.constant_initializer(0.05)
         kernel_init = tf.keras.initializers.he_normal()
         regularizer = tf.contrib.layers.l2_regularizer(scale=0.01)
-
-        self.input_triples = input_triples
 
         ################################################## 
         # Convolutional Architecture
@@ -84,17 +63,21 @@ class Discriminator(object):
         self.flattened_context = tf.reshape(self.conv3_5, [-1, self.conv3_5.get_shape()[1]*self.conv3_5.get_shape()[2]*self.conv3_5.get_shape()[3]])
         self.partially_flattened_context = tf.reshape(self.conv3_5, [-1, self.conv3_5.get_shape()[1]*self.conv3_5.get_shape()[2], self.conv3_5.get_shape()[3]])
         #TODO Should this also incorporate the triple somehow?
-        self.cell_init_state = tf.reduce_mean(self.conv3_5, axis=(1,2))
-        self.cell_init_state = tf.contrib.rnn.LSTMStateTuple(self.cell_init_state, self.cell_init_state)
+        state = tf.reduce_mean(self.conv3_5, axis=(1,2))
+        state = tf.contrib.rnn.LSTMStateTuple(state, state)
         
         #LSTM receives as input at each timestep z_hat concat with
         #the triple input at that timestep
         lstm_cell = tf.contrib.rnn.LayerNormBasicLSTMCell(512)
 
-        outputs_ta, final_state, decoded_logits = tf.nn.raw_rnn(lstm_cell, self.loopFn, swap_memory=True)
+        discriminator_logits = []
 
-        lstm_outputs = tf.transpose(outputs_ta.stack(), perm=[1,0,2])
+        for i in range(3):
+            indices = input_triples[:, i, :]
+            embedding = tf.matmul(indices, self.embedding_matrix)
+            next_input = tf.concat([self.attentionMechanism(state), embedding], axis=1)
+            output, state = lstm_cell(next_input, state)
+            discriminator_logits.append(tf.layers.dense(inputs = output, units=1, name="decoder", reuse=tf.AUTO_REUSE))
 
-        discriminator_logits = tf.layers.dense(inputs = lstm_outputs, units=1, name="decoder", reuse=tf.AUTO_REUSE)
-
+        discriminator_logits = tf.stack(discriminator_logits, axis=1)
         return discriminator_logits

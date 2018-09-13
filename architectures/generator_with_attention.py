@@ -17,22 +17,6 @@ class Generator(object):
         z_hat = tf.reduce_sum(tf.multiply(self.partially_flattened_context, tf.expand_dims(self.alpha, 2)), axis=1)
         return z_hat
 
-    def loopFn(self, time, cell_output, cell_state, loop_state):
-        emit_output = cell_output
-        if cell_output is None:
-            next_cell_state = self.cell_init_state
-            next_input = self.attentionMechanism(next_cell_state)
-            
-        else:
-            next_cell_state = cell_state
-            next_input = self.attentionMechanism(next_cell_state)
-
-        next_loop_state = None
-        elements_finished = (time >= 3)
-        finished = tf.reduce_all(elements_finished)
-        return (elements_finished, next_input, next_cell_state, emit_output, next_loop_state)
-
-
     def build_generator(self, images, is_training=True):
         bias_init = tf.constant_initializer(0.05)
         kernel_init = tf.keras.initializers.he_normal()
@@ -79,15 +63,17 @@ class Generator(object):
         #TODO Check that inputs are being input in the correct order?
         self.flattened_context = tf.reshape(self.conv3_5, [-1, self.conv3_5.get_shape()[1]*self.conv3_5.get_shape()[2]*self.conv3_5.get_shape()[3]])
         self.partially_flattened_context = tf.reshape(self.conv3_5, [-1, self.conv3_5.get_shape()[1]*self.conv3_5.get_shape()[2], self.conv3_5.get_shape()[3]])
-        self.cell_init_state = tf.reduce_mean(self.conv3_5, axis=(1,2))
-        self.cell_init_state = tf.contrib.rnn.LSTMStateTuple(self.cell_init_state, self.cell_init_state)
+        state = tf.reduce_mean(self.conv3_5, axis=(1,2))
+        state = tf.contrib.rnn.LSTMStateTuple(state, state)
 
         lstm_cell = tf.contrib.rnn.LayerNormBasicLSTMCell(512)
 
-        outputs_ta, final_state, decoded_logits = tf.nn.raw_rnn(lstm_cell, self.loopFn, swap_memory=True)
+        decoded_logits = []
 
-        lstm_outputs = tf.transpose(outputs_ta.stack(), perm=[1,0,2])
+        for i in range(3):
+            next_input = self.attentionMechanism(state)
+            output, state = lstm_cell(next_input, state)
+            decoded_logits.append(tf.layers.dense(inputs = output, units=self.vocab_size, name="decoder", reuse=tf.AUTO_REUSE))
 
-        decoded_logits = tf.layers.dense(inputs = lstm_outputs, units=self.vocab_size, name="decoder", reuse=tf.AUTO_REUSE)
-
+        decoded_logits = tf.stack(decoded_logits, axis=1)
         return decoded_logits

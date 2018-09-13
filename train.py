@@ -240,6 +240,7 @@ class SceneGraphGAN(object):
         self.train_steps = tf.contrib.gan.GANTrainSteps(1, self.CRITIC_ITERS)
 
         self.train_fn = tf.contrib.gan.get_sequential_train_steps(self.train_steps)
+        #self.train_hooks = tf.contrib.gan.get_sequential_train_hooks(train_steps=self.train_steps)
 
     ############################################################
     ## Saving and Testing
@@ -279,7 +280,7 @@ class SceneGraphGAN(object):
 
             for itr in pbar:
                 current_loss, _ = self.train_fn(sess, self.gan_train_ops, self.global_step,\
-                     feed_dict = {self.feedable_handle : train_handle, self.training_placeholder : True})
+                     train_step_kwargs={feed_dict : {self.feedable_handle : train_handle, self.training_placeholder : True}})
 
 
 if __name__ == "__main__":
