@@ -155,13 +155,14 @@ class SceneGraphGAN(object):
         d = d.apply(tf.contrib.data.map_and_batch(
                 map_func=self._parseFunction, batch_size=tf.cast(self.batch_size_placeholder, dtype=tf.int64), num_parallel_batches=2))
 
-        d = d.prefetch(buffer_size=tf.cast(self.batch_size_placeholder*4, dtype=tf.int64))
 
         #Shouldn't be necessary anymore since I can specify
         #The number of critic iters to run
-        #if train:
-        #    d = d.flat_map(
-        #            lambda x, y: tf.data.Dataset.from_tensors((x, y)).repeat(self.CRITIC_ITERS + 1))
+        if train:
+            d = d.flat_map(
+                    lambda x, y: tf.data.Dataset.from_tensors((x, y)).repeat(self.CRITIC_ITERS + 1))
+
+        d = d.prefetch(buffer_size=tf.cast(self.batch_size_placeholder*(self.CRITIC_ITERS + 1)*2, dtype=tf.int64))
 
         iterator = d.make_initializable_iterator()
         return d, iterator
@@ -228,19 +229,29 @@ class SceneGraphGAN(object):
                         gradient_penalty_weight = self.LAMBDA,
                         gradient_penalty_one_sided = True)
 
+        gen_cost = improved_wgan_loss[0]
+        disc_cost = improved_wgan_loss[1]
+
         self.generator_optimizer =  tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Generator_Adam") 
         self.discriminator_optimizer =  tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Discriminator_Adam") 
 
-        self.gan_train_ops = tf.contrib.gan.gan_train_ops(
-            wgan_model,
-            improved_wgan_loss,
-            self.generator_optimizer,
-            self.discriminator_optimizer)
+        train_variables = tf.trainable_variables()
+        gen_params = [v for v in train_variables if v.name.startswith("Generator")]
+        disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
 
-        self.train_steps = tf.contrib.gan.GANTrainSteps(1, self.CRITIC_ITERS)
+        self.gen_train_op = self.generator_optimizer.minimize(gen_cost, var_list = gen_params)
+        self.disc_train_op = self.discriminator_optimizer.minimize(disc_cost, var_list = disc_params)
 
-        self.train_fn = tf.contrib.gan.get_sequential_train_steps(self.train_steps)
-        #self.train_hooks = tf.contrib.gan.get_sequential_train_hooks(train_steps=self.train_steps)
+        #self.gan_train_ops = tf.contrib.gan.gan_train_ops(
+        #    wgan_model,
+        #    improved_wgan_loss,
+        #    self.generator_optimizer,
+        #    self.discriminator_optimizer)
+
+        #self.train_steps = tf.contrib.gan.GANTrainSteps(1, self.CRITIC_ITERS)
+
+        #self.train_fn = tf.contrib.gan.get_sequential_train_steps(self.train_steps)
+        ##self.train_hooks = tf.contrib.gan.get_sequential_train_hooks(train_steps=self.train_steps)
 
     ############################################################
     ## Saving and Testing
@@ -279,8 +290,9 @@ class SceneGraphGAN(object):
             pbar.set_postfix(mode="Train")
 
             for itr in pbar:
-                current_loss, _ = self.train_fn(sess, self.gan_train_ops, self.global_step,\
-                     train_step_kwargs={feed_dict : {self.feedable_handle : train_handle, self.training_placeholder : True}})
+                for i in range(self.CRITIC_ITERS):
+                    sess.run(self.disc_train_op, feed_dict = {self.feedable_handle : train_handle, self.training_placeholder : True})
+                sess.run(self.gen_train_op, feed_dict = {self.feedable_handle : train_handle, self.training_placeholder : True})
 
 
 if __name__ == "__main__":
@@ -300,7 +312,7 @@ if __name__ == "__main__":
     parser.add_argument("--path_to_image_stds", help="Path to the image stds", default="./dataset_creation/image_stds.txt")
 
     parser.add_argument("--batch_size", default=64, help="Batch size defaults", type=int)
-    parser.add_argument("--critic_iters", default=12, help="Number of critic iterations per generator iteration", type=int)
+    parser.add_argument("--critic_iters", default=10, help="Number of critic iterations per generator iteration", type=int)
     parser.add_argument("--lambda", default=10, help="WGAN Lipschitz Penalty", type=int)
     parser.add_argument("--resume", default=False, help="Specifies whether or not to resume from the last checkpoint", type=bool)
 

@@ -6,6 +6,7 @@ import argparse
 import struct
 import numpy as np
 import copy
+import operator
 
 from tqdm import tqdm
 
@@ -56,11 +57,13 @@ def createVocab(path_to_scene_graphs, vocab_out_path):
     with open(path_to_scene_graphs, "r") as f:
         sgs = json.load(f)
 
-    threshold = 100
+    attribute_counts = {}
+    relation_counts = {}
+    object_counts = {}
+
     vocab = {}
-    counts = {}
-    vocab["be"] = 0
-    counts["be"] = threshold + 1
+
+    top_n = 150
 
     for sg in tqdm(sgs, total=len(sgs)):
         #Collect vocab of atts
@@ -68,36 +71,39 @@ def createVocab(path_to_scene_graphs, vocab_out_path):
             if 'attributes' in a['attribute']:
                 for a_name in a['attribute']['attributes']:
                     cleaned = a_name.lower().strip()
-                    if cleaned not in vocab:
-                        vocab[cleaned] = len(vocab)
-                        counts[cleaned] = 0
+                    if cleaned not in attribute_counts:
+                        attribute_counts[cleaned] = 1
                     else:
-                        counts[cleaned] += 1
+                        attribute_counts[cleaned] += 1
         #Collect vocab of objects
         for o in sg['objects']:
             for name in o["names"]:
                 cleaned = name.lower().strip()
-                if cleaned not in vocab:
-                    vocab[cleaned] = len(vocab)
-                    counts[cleaned] = 0
+                if cleaned not in object_counts:
+                    object_counts[cleaned] = 1
                 else:
-                    counts[cleaned] += 1
+                    object_counts[cleaned] += 1
 
         #Collect vocab of relations
         for r in sg['relationships']:
             cleaned = r["predicate"].lower().strip()
-            if cleaned not in vocab:
-                vocab[cleaned] = len(vocab)
-                counts[cleaned] = 0
+            if cleaned not in relation_counts:
+                relation_counts[cleaned] = 1
             else:
-                counts[cleaned] += 1
+                relation_counts[cleaned] += 1
 
-    for k in vocab.keys():
-        if counts[k] < threshold:
-            del vocab[k]
+    top_attributes = sorted(attribute_counts.items(), key=operator.itemgetter(1), reverse=True)[:top_n]
+    top_objects = sorted(object_counts.items(), key=operator.itemgetter(1), reverse=True)[:top_n]
+    top_relations = sorted(relation_counts.items(), key=operator.itemgetter(1), reverse=True)[:top_n]
 
-    #Re-index
-    vocab = {k:i for i, k in enumerate(vocab.keys())}
+    for v in [top_attributes, top_objects, top_relations]:
+        for tup in v:
+            if tup[0] in vocab:
+                continue
+            else:
+                vocab[tup[0]] = len(vocab)
+
+    vocab["be"] = len(vocab)
 
     with open(vocab_out_path, "w") as f:
         json.dump(vocab, f)

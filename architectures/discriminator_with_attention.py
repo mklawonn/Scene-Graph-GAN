@@ -12,7 +12,7 @@ class Discriminator(object):
 
     def attentionMechanism(self, cell_state):
         context_and_state = tf.concat([self.flattened_context, cell_state[0]], axis=1)
-        e = tf.layers.dense(inputs = context_and_state, units=self.conv3_5.get_shape()[1]*self.conv3_5.get_shape()[2], name="attention_perceptron", reuse=tf.AUTO_REUSE)
+        e = tf.layers.dense(inputs = context_and_state, units=self.downsampled.get_shape()[1]*self.downsampled.get_shape()[2], name="attention_perceptron", reuse=tf.AUTO_REUSE)
         self.alpha = tf.nn.softmax(e, name="attention_softmax")
         z_hat = tf.reduce_sum(tf.multiply(self.partially_flattened_context, tf.expand_dims(self.alpha, 2)), axis=1)
         return z_hat
@@ -55,15 +55,17 @@ class Discriminator(object):
         batchnorm3_2 = tf.layers.batch_normalization(inputs = conv3_4, axis=-1, training=is_training)
 
         #Downsample
-        self.conv3_5 = tf.layers.conv2d(inputs = batchnorm3_2, filters=512, kernel_size=[5,5], padding="same", strides=2, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        conv3_5 = tf.layers.conv2d(inputs = batchnorm3_2, filters=512, kernel_size=[5,5], padding="same", strides=2, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+
+        self.downsampled = tf.layers.conv2d(inputs = conv3_5, filters=512, kernel_size=[5,5], padding="same", strides=2, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
 
         ################################################## 
         # Process input triples with LSTM
         ################################################## 
-        self.flattened_context = tf.reshape(self.conv3_5, [-1, self.conv3_5.get_shape()[1]*self.conv3_5.get_shape()[2]*self.conv3_5.get_shape()[3]])
-        self.partially_flattened_context = tf.reshape(self.conv3_5, [-1, self.conv3_5.get_shape()[1]*self.conv3_5.get_shape()[2], self.conv3_5.get_shape()[3]])
+        self.flattened_context = tf.reshape(self.downsampled, [-1, self.downsampled.get_shape()[1]*self.downsampled.get_shape()[2]*self.downsampled.get_shape()[3]])
+        self.partially_flattened_context = tf.reshape(self.downsampled, [-1, self.downsampled.get_shape()[1]*self.downsampled.get_shape()[2], self.downsampled.get_shape()[3]])
         #TODO Should this also incorporate the triple somehow?
-        state = tf.reduce_mean(self.conv3_5, axis=(1,2))
+        state = tf.reduce_mean(self.downsampled, axis=(1,2))
         state = tf.contrib.rnn.LSTMStateTuple(state, state)
         
         #LSTM receives as input at each timestep z_hat concat with
