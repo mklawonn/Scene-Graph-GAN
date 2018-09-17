@@ -70,10 +70,12 @@ class Generator(object):
 
         lstm_cell = tf.contrib.rnn.LayerNormBasicLSTMCell(512)
 
+        noise = tf.random_normal(tf.shape(self.attentionMechanism(state)), mean=0.0, stddev=1.0)
+
         decoded_logits = []
 
         for i in range(3):
-            next_input = self.attentionMechanism(state)
+            next_input = tf.concat([self.attentionMechanism(state), noise], axis=1)
             output, state = lstm_cell(next_input, state)
             decoded_logits.append(tf.layers.dense(inputs = output, units=self.vocab_size, name="decoder", reuse=tf.AUTO_REUSE))
 

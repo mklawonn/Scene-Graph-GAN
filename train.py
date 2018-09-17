@@ -27,7 +27,7 @@ class SceneGraphGAN(object):
         self.CRITIC_ITERS = critic_iters
         self.BATCH_SIZE = batch_size
         self.VAL_BATCH_SIZE = batch_size / 2
-        self.TEST_BATCH_SIZE = batch_size
+        self.TEST_BATCH_SIZE = 512
         self.LAMBDA = lambda_
 
         #Flags
@@ -57,9 +57,9 @@ class SceneGraphGAN(object):
         with open(path_to_vocab, "r") as f:
             self.vocab = json.load(f)
 
-        self.embeddings = np.load(path_to_word_embeddings)
+        self._createStringMappings()
 
-        self.reverse_vocab = {y:x for x,y in self.vocab.iteritems()}
+        self.embeddings = np.load(path_to_word_embeddings)
 
         with tf.variable_scope("Generator") as scope:
             self.g = Generator(len(self.vocab))
@@ -71,6 +71,15 @@ class SceneGraphGAN(object):
             self.d = Discriminator(len(self.vocab), W)
 
         self._loadImageMeans()
+
+    def _createStringMappings(self):
+        self.reverse_vocab = {y:x for x,y in self.vocab.iteritems()}
+        words = [None]*len(self.reverse_vocab)
+        for index, word in self.reverse_vocab.iteritems():
+            words[index] = word
+        mapping_string = tf.constant(words)
+        self.lookup_table = tf.contrib.lookup.index_to_string_table_from_tensor(
+                                mapping_string, default_value="UNK")
 
     def _Generator(self, images, is_training=True):
         with tf.variable_scope("Generator", reuse=tf.AUTO_REUSE) as scope:
@@ -111,24 +120,42 @@ class SceneGraphGAN(object):
         all_files = []
         all_labels = []
 
-        for k,v in self.ims_to_triples.iteritems():
+        train_ims_to_triples = {k: self.ims_to_triples[k] for k in self.ims_to_triples.keys()[:int(0.9*len(self.ims_to_triples))]}
+        test_ims_to_triples = {k: self.ims_to_triples[k] for k in self.ims_to_triples.keys()[int(0.9*len(self.ims_to_triples)):]}
+
+        for k,v in train_ims_to_triples.iteritems():
             for t in v:
                 all_files.append(k)
                 all_labels.append(t)
 
         all_files, all_labels = shuffle(all_files, all_labels)
-        train_threshold = int(0.8*len(all_files))
-        val_threshold = int(0.9*len(all_files))
+        train_threshold = int(0.88*len(all_files))
         train_files = all_files[:train_threshold]
         train_labels = np.reshape(all_labels[:train_threshold], (-1, 3))
-        val_files = all_files[train_threshold:val_threshold]
-        val_labels = np.reshape(all_labels[train_threshold:val_threshold], (-1, 3))
-        test_files = all_files[val_threshold:]
-        test_labels = np.reshape(all_labels[val_threshold:], (-1, 3))
+        val_files = all_files[train_threshold:]
+        val_labels = np.reshape(all_labels[train_threshold:], (-1, 3))
 
-        self.max_iterations = 5*len(train_files)
-        self.write_iterations = int(len(train_files) / 50)
-        self.test_iterations = int(len(train_files) / 2)
+        fs, ls = zip(*test_ims_to_triples.items())
+        #test_labels = np.reshape(all_labels[val_threshold:], (-1, 3))
+        #Make sure that each image is repeated TEST_BATCH_SIZE times
+        for i, triple_list in enumerate(ls):
+            count = 0
+            for triple in triple_list:
+                test_files.append(fs[i])
+                test_labels.append(triple)
+                count += 1
+            while count < self.TEST_BATCH_SIZE:
+                test_files.append(fs[i])
+                test_labels.append(triple_list[-1])
+                count += 1
+
+        #TODO Uncomment after testing the self.test function
+        self.max_iterations = 1
+        #self.max_iterations = 5*len(train_files)
+        #self.write_iterations = int(len(train_files) / 50)
+        self.write_iterations = 10
+        self.validate_iterations = int(len(train_files) / 50)
+        #self.test_iterations = int(len(train_files) / 2)
 
         del all_files
         del all_labels
@@ -141,7 +168,6 @@ class SceneGraphGAN(object):
         image_string = tf.read_file(filename)
         image_decoded = tf.image.decode_jpeg(image_string, channels=3)
         image_resized = tf.image.resize_images(image_decoded, [221, 221])
-        #image_standardized = tf.image.per_image_standardization(image_resized)
         image_standardized = (image_resized - self.image_means) / self.image_stds
         one_hot = tf.one_hot(label, len(self.vocab))
         return image_standardized, one_hot
@@ -153,16 +179,13 @@ class SceneGraphGAN(object):
             d = d.shuffle(buffer_size=tf.cast(self.batch_size_placeholder*10, dtype=tf.int64))
 
         d = d.apply(tf.contrib.data.map_and_batch(
-                map_func=self._parseFunction, batch_size=tf.cast(self.batch_size_placeholder, dtype=tf.int64), num_parallel_batches=2))
+                map_func=self._parseFunction, batch_size=tf.cast(self.batch_size_placeholder, dtype=tf.int64), num_parallel_batches=(self.CRITIC_ITERS + 1)*4))
 
-
-        #Shouldn't be necessary anymore since I can specify
-        #The number of critic iters to run
         if train:
             d = d.flat_map(
                     lambda x, y: tf.data.Dataset.from_tensors((x, y)).repeat(self.CRITIC_ITERS + 1))
 
-        d = d.prefetch(buffer_size=tf.cast(self.batch_size_placeholder*(self.CRITIC_ITERS + 1)*2, dtype=tf.int64))
+        d = d.prefetch(buffer_size=tf.cast(self.batch_size_placeholder*(self.CRITIC_ITERS + 1)*4, dtype=tf.int64))
 
         iterator = d.make_initializable_iterator()
         return d, iterator
@@ -186,9 +209,6 @@ class SceneGraphGAN(object):
         train_handle = sess.run(self.train_it.string_handle())
         val_handle = sess.run(self.val_it.string_handle())
 
-        #TODO Make sure that the test dataset is
-        #compatible with self.test() and the test
-        #operations
         self.test_files = test_files
         self.test_labels = test_labels
 
@@ -208,7 +228,6 @@ class SceneGraphGAN(object):
     ## Graph construction
     ############################################################
     def _constructOps(self):
-        #TODO Testing operation calculations
         self.global_step = tf.train.get_or_create_global_step()
 
         self.training_placeholder = tf.placeholder(tf.bool, shape=[])
@@ -232,6 +251,9 @@ class SceneGraphGAN(object):
         gen_cost = improved_wgan_loss[0]
         disc_cost = improved_wgan_loss[1]
 
+        tf.summary.scalar("gen_loss", gen_cost)
+        tf.summary.scalar("disc_loss", disc_cost)
+
         self.generator_optimizer =  tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Generator_Adam") 
         self.discriminator_optimizer =  tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Discriminator_Adam") 
 
@@ -242,16 +264,21 @@ class SceneGraphGAN(object):
         self.gen_train_op = self.generator_optimizer.minimize(gen_cost, var_list = gen_params)
         self.disc_train_op = self.discriminator_optimizer.minimize(disc_cost, var_list = disc_params)
 
-        #self.gan_train_ops = tf.contrib.gan.gan_train_ops(
-        #    wgan_model,
-        #    improved_wgan_loss,
-        #    self.generator_optimizer,
-        #    self.discriminator_optimizer)
+        #Defining test ops
+        self.fake_inputs = self._Generator(self.next_images, self.training_placeholder)
+        self.fake_triples = tf.argmax(self.fake_inputs, axis=-1)
+        self.real_triples = tf.argmax(self.next_labels, axis=-1)
+        self.disc_fake = self._Discriminator(self.fake_inputs, self.next_images, self.training_placeholder)
 
-        #self.train_steps = tf.contrib.gan.GANTrainSteps(1, self.CRITIC_ITERS)
+        self.fake_words = self.lookup_table.lookup(self.fake_triples)
+        self.real_words = self.lookup_table.lookup(self.real_triples)
 
-        #self.train_fn = tf.contrib.gan.get_sequential_train_steps(self.train_steps)
-        ##self.train_hooks = tf.contrib.gan.get_sequential_train_hooks(train_steps=self.train_steps)
+        tf.summary.text("Fake triples", self.fake_words)
+        tf.summary.text("Real triples", self.real_words)
+
+        self.saver = tf.train.Saver()
+        self.merged = tf.summary.merge_all()
+
 
     ############################################################
     ## Saving and Testing
@@ -263,10 +290,47 @@ class SceneGraphGAN(object):
     def _loadModel(self, sess):
         self.saver.restore(sess, os.path.join(self.checkpoints_dir, "model.ckpt"))
 
-    #TODO Implement testing
+    def _recall(self, fake, real, N):
+        return float(len(set(map(tuple, fake)).intersection(set(map(tuple, real))))) / N
+
     def test(self, sess):
         self._initDataset(self.test_it, sess, self.test_files, self.test_labels, self.TEST_BATCH_SIZE)
         test_handle = sess.run(self.test_it.string_handle())
+
+        r_at_50 = []
+        r_at_100 = []
+        #While not all examples seen
+
+        #TODO Correct data type?
+        fake_accumulator = np.empty((0, 3), dtype=np.float64)
+        real_accumulator = np.empty((0, 3), dtype=np.float64)
+        score_accumulator = np.empty((0, 1), dtype=np.float64)
+
+        pbar = tqdm(total=len(self.test_files)/512)
+        while True:
+            try:
+                #Generate A BUNCH of fake triples for a single image input
+                fake_triples, real_triples, disc_scores = sess.run([self.fake_triples, self.real_triples, self.disc_fake],\
+                    feed_dict = {self.feedable_handle : test_handle, self.training_placeholder : False})
+
+                disc_scores = np.mean(disc_scores, axis=1)
+                #Sort by discriminator score
+                indices = disc_scores.argsort()
+                top_50_indices = indices[:50]
+                top_100_indices = indices[:100]
+                #Calculate R@ top 50 and R@ top 100 with true triples
+                #Add to the list of recalls
+                r_at_50.append(self._recall(np.squeeze(fake_triples[top_50_indices]), real_triples, 50.0))
+                r_at_100.append(self._recall(np.squeeze(fake_triples[top_100_indices]), real_triples, 100.0))
+                pbar.update(1)
+            except Exception as e:
+                print e
+                break
+
+        pbar.close()
+        #Average and write out recalls
+        with open("recalls.txt", "w") as f:
+            f.write("{}\n{}".format(np.mean(r_at_50), np.mean(r_at_100)))
 
     ############################################################
     ## Training
@@ -277,6 +341,7 @@ class SceneGraphGAN(object):
         with tf.Session() as sess:
             train_handle, val_handle = self._loadDatasets(sess)
             self._constructOps()
+            train_writer = tf.summary.FileWriter(self.summaries_dir, sess.graph)
 
             if self.resume:
                 self._loadModel(sess)
@@ -284,6 +349,7 @@ class SceneGraphGAN(object):
                 init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
                 sess.run(init)
                 sess.run(self.embedding_init, feed_dict={self.embedding_placeholder : self.embeddings})
+                sess.run(self.lookup_table.init)
                 del self.embeddings
 
             pbar = tqdm(range(self.max_iterations))
@@ -293,6 +359,17 @@ class SceneGraphGAN(object):
                 for i in range(self.CRITIC_ITERS):
                     sess.run(self.disc_train_op, feed_dict = {self.feedable_handle : train_handle, self.training_placeholder : True})
                 sess.run(self.gen_train_op, feed_dict = {self.feedable_handle : train_handle, self.training_placeholder : True})
+
+                if itr % self.write_iterations == 0:
+                    pbar.set_postfix(mode="Writing")
+                    merged = sess.run(self.merged, feed_dict = {self.feedable_handle : val_handle, self.training_placeholder : False})
+                    train_writer.add_summary(merged, itr)
+
+                #TODO Validate
+                #if itr % self.validate_iterations == 0:
+
+            print "Testing"
+            self.test(sess)
 
 
 if __name__ == "__main__":
