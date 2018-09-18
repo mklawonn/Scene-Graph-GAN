@@ -332,7 +332,6 @@ class SceneGraphGAN(object):
                 r_at_100.append(self._recall(np.squeeze(fake_accumulator[top_100_indices]), real_accumulator, 100.0))
                 pbar.update(1)
             except Exception as e:
-                print e
                 break
 
         pbar.close()
