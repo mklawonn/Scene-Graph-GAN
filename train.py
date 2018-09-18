@@ -152,9 +152,7 @@ class SceneGraphGAN(object):
                 test_labels.append(triple_list[-1])
                 count += 1
 
-        #TODO Uncomment after testing the self.test function
-        self.max_iterations = 1
-        #self.max_iterations = 5*len(train_files)
+        self.max_iterations = 5*len(train_files)
         #self.write_iterations = int(len(train_files) / 50)
         self.write_iterations = 10
         self.validate_iterations = int(len(train_files) / 50)
@@ -251,11 +249,11 @@ class SceneGraphGAN(object):
                         gradient_penalty_weight = self.LAMBDA,
                         gradient_penalty_one_sided = True)
 
-        gen_cost = improved_wgan_loss[0]
-        disc_cost = improved_wgan_loss[1]
+        self.gen_cost = improved_wgan_loss[0]
+        self.disc_cost = improved_wgan_loss[1]
 
-        tf.summary.scalar("gen_loss", gen_cost)
-        tf.summary.scalar("disc_loss", disc_cost)
+        tf.summary.scalar("gen_loss", self.gen_cost)
+        tf.summary.scalar("disc_loss", self.disc_cost)
 
         self.generator_optimizer =  tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Generator_Adam") 
         self.discriminator_optimizer =  tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9, name="Discriminator_Adam") 
@@ -264,8 +262,8 @@ class SceneGraphGAN(object):
         gen_params = [v for v in train_variables if v.name.startswith("Generator")]
         disc_params = [v for v in train_variables if v.name.startswith("Discriminator")]
 
-        self.gen_train_op = self.generator_optimizer.minimize(gen_cost, var_list = gen_params)
-        self.disc_train_op = self.discriminator_optimizer.minimize(disc_cost, var_list = disc_params)
+        self.gen_train_op = self.generator_optimizer.minimize(self.gen_cost, var_list = gen_params)
+        self.disc_train_op = self.discriminator_optimizer.minimize(self.disc_cost, var_list = disc_params)
 
         #Defining test ops
         self.fake_inputs = self._Generator(self.next_images, self.training_placeholder)
@@ -303,9 +301,6 @@ class SceneGraphGAN(object):
         r_at_50 = []
         r_at_100 = []
         #While not all examples seen
-
-        #TODO Correct data type?
-
         pbar = tqdm(total=len(self.test_files))
         while True:
             try:
@@ -362,18 +357,32 @@ class SceneGraphGAN(object):
             pbar = tqdm(range(self.max_iterations))
             pbar.set_postfix(mode="Train")
 
+            convergence_count = 0
+            last_loss = float("inf")
             for itr in pbar:
+                pbar.set_postfix(mode="Training Critic")
                 for i in range(self.CRITIC_ITERS):
                     sess.run(self.disc_train_op, feed_dict = {self.feedable_handle : train_handle, self.training_placeholder : True})
+                pbar.set_postfix(mode="Training Generator")
+
                 sess.run(self.gen_train_op, feed_dict = {self.feedable_handle : train_handle, self.training_placeholder : True})
 
                 if itr % self.write_iterations == 0:
                     pbar.set_postfix(mode="Writing")
-                    merged = sess.run(self.merged, feed_dict = {self.feedable_handle : val_handle, self.training_placeholder : False})
+                    merged, _, _ = sess.run([self.merged, self.fake_words, self.real_words], feed_dict = {self.feedable_handle : val_handle, self.training_placeholder : False})
                     train_writer.add_summary(merged, itr)
 
-                #TODO Validate
-                #if itr % self.validate_iterations == 0:
+                if itr % self.validate_iterations == 0:
+                    pbar.set_postfix(mode="Validating")
+                    loss = np.mean(sess.run(self.disc_cost, feed_dict = {self.feedable_handle : val_handle, self.training_placeholder : False}))
+                    if last_loss < loss:
+                        convergence_count += 1
+                    else:
+                        convergence_count = 0
+                    if convergence_count == 3:
+                        break
+                    last_loss = loss
+
 
             print "Testing"
             self.test(sess)

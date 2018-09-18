@@ -26,38 +26,46 @@ class Discriminator(object):
         # Convolutional Architecture
         ################################################## 
         #Block 1
-        conv1_1 = tf.layers.conv2d(inputs = images, filters=32, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
-        conv1_2 = tf.layers.conv2d(inputs = conv1_1, filters=32, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
-        batchnorm1_1 = tf.layers.batch_normalization(inputs = conv1_2, axis=-1, training=is_training)
+        conv1_1 = tf.layers.conv2d(inputs = images, filters=32, kernel_size=[3,3], padding="same", strides=1, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        layernorm1_1 = tf.contrib.layers.layer_norm(inputs = conv1_1, activation_fn=tf.nn.elu)
+        conv1_2 = tf.layers.conv2d(inputs = layernorm1_1, filters=32, kernel_size=[3,3], padding="same", strides=1, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        layernorm1_2 = tf.contrib.layers.layer_norm(inputs = conv1_2, activation_fn=tf.nn.elu)
 
         #Downsample
-        conv1_3 = tf.layers.conv2d(inputs = batchnorm1_1, filters=32, kernel_size=[5,5], padding="same", strides=2, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        conv1_3 = tf.layers.conv2d(inputs = layernorm1_2, filters=32, kernel_size=[5,5], padding="same", strides=2, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        layernorm1_3 = tf.contrib.layers.layer_norm(inputs = conv1_3, activation_fn=tf.nn.elu)
 
         #Block 2
-        conv2_1 = tf.layers.conv2d(inputs = conv1_3, filters=64, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
-        conv2_2 = tf.layers.conv2d(inputs = conv2_1, filters=64, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
-        batchnorm2_1 = tf.layers.batch_normalization(inputs = conv2_2, axis=-1, training=is_training)
+        conv2_1 = tf.layers.conv2d(inputs = layernorm1_3, filters=64, kernel_size=[3,3], padding="same", strides=1, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        layernorm2_1 = tf.contrib.layers.layer_norm(inputs = conv2_1, activation_fn=tf.nn.elu)
+        conv2_2 = tf.layers.conv2d(inputs = layernorm2_1, filters=64, kernel_size=[3,3], padding="same", strides=1, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        layernorm2_2 = tf.contrib.layers.layer_norm(inputs = conv2_2, activation_fn=tf.nn.elu)
         #Block 2_2
-        conv2_3 = tf.layers.conv2d(inputs = batchnorm2_1, filters=128, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
-        conv2_4 = tf.layers.conv2d(inputs = conv2_3, filters=128, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
-        batchnorm2_2 = tf.layers.batch_normalization(inputs = conv2_4, axis=-1, training=is_training)
+        conv2_3 = tf.layers.conv2d(inputs = layernorm2_2, filters=128, kernel_size=[3,3], padding="same", strides=1, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        layernorm2_3 = tf.contrib.layers.layer_norm(inputs = conv2_3, activation_fn=tf.nn.elu)
+        conv2_4 = tf.layers.conv2d(inputs = layernorm2_3, filters=128, kernel_size=[3,3], padding="same", strides=1, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        layernorm2_4 = tf.contrib.layers.layer_norm(inputs = conv2_4, activation_fn=tf.nn.elu)
 
         #Downsample
-        conv2_5 = tf.layers.conv2d(inputs = batchnorm2_2, filters=128, kernel_size=[5,5], padding="same", strides=2, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        conv2_5 = tf.layers.conv2d(inputs = layernorm2_4, filters=128, kernel_size=[5,5], padding="same", strides=2, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        layernorm2_5 = tf.contrib.layers.layer_norm(inputs = conv2_5, activation_fn=tf.nn.elu)
 
         #Block 3
-        conv3_1 = tf.layers.conv2d(inputs = conv2_5, filters=256, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
-        conv3_2 = tf.layers.conv2d(inputs = conv3_1, filters=256, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
-        batchnorm3_1 = tf.layers.batch_normalization(inputs = conv3_2, axis=-1, training=is_training)
+        conv3_1 = tf.layers.conv2d(inputs = layernorm2_5, filters=256, kernel_size=[3,3], padding="same", strides=1, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        layernorm3_1 = tf.contrib.layers.layer_norm(inputs = conv3_1, activation_fn=tf.nn.elu)
+        conv3_2 = tf.layers.conv2d(inputs = layernorm3_1, filters=256, kernel_size=[3,3], padding="same", strides=1, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        layernorm3_2 = tf.contrib.layers.layer_norm(inputs = conv3_2, activation_fn=tf.nn.elu)
         #Block 3_2
-        conv3_3 = tf.layers.conv2d(inputs = batchnorm3_1, filters=512, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
-        conv3_4 = tf.layers.conv2d(inputs = conv3_3, filters=512, kernel_size=[3,3], padding="same", strides=1, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
-        batchnorm3_2 = tf.layers.batch_normalization(inputs = conv3_4, axis=-1, training=is_training)
+        conv3_3 = tf.layers.conv2d(inputs = layernorm3_2, filters=512, kernel_size=[3,3], padding="same", strides=1, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        layernorm3_3 = tf.contrib.layers.layer_norm(inputs = conv3_3, activation_fn=tf.nn.elu)
+        conv3_4 = tf.layers.conv2d(inputs = conv3_3, filters=512, kernel_size=[3,3], padding="same", strides=1, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        layernorm3_4 = tf.contrib.layers.layer_norm(inputs = conv3_4, activation_fn=tf.nn.elu)
 
         #Downsample
-        conv3_5 = tf.layers.conv2d(inputs = batchnorm3_2, filters=512, kernel_size=[5,5], padding="same", strides=2, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        conv3_5 = tf.layers.conv2d(inputs = layernorm3_2, filters=512, kernel_size=[5,5], padding="same", strides=2, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        layernorm3_5 = tf.contrib.layers.layer_norm(inputs = conv3_5, activation_fn=tf.nn.elu)
 
-        self.downsampled = tf.layers.conv2d(inputs = conv3_5, filters=512, kernel_size=[5,5], padding="same", strides=2, activation=tf.nn.elu, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
+        self.downsampled = tf.layers.conv2d(inputs = layernorm3_5, filters=512, kernel_size=[5,5], padding="same", strides=2, activation=None, kernel_regularizer=regularizer, bias_initializer = bias_init, kernel_initializer = kernel_init)
 
         ################################################## 
         # Process input triples with LSTM
