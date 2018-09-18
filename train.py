@@ -27,7 +27,8 @@ class SceneGraphGAN(object):
         self.CRITIC_ITERS = critic_iters
         self.BATCH_SIZE = batch_size
         self.VAL_BATCH_SIZE = batch_size / 2
-        self.TEST_BATCH_SIZE = 512
+        self.TEST_BATCH_SIZE = batch_size / 2
+        self.TEST_BATCH_MULTIPLIER = 8
         self.LAMBDA = lambda_
 
         #Flags
@@ -144,7 +145,9 @@ class SceneGraphGAN(object):
                 test_files.append(fs[i])
                 test_labels.append(triple)
                 count += 1
-            while count < self.TEST_BATCH_SIZE:
+            if len(triple_list) == 0:
+                continue
+            while count < self.TEST_BATCH_SIZE*self.TEST_BATCH_MULTIPLIER:
                 test_files.append(fs[i])
                 test_labels.append(triple_list[-1])
                 count += 1
@@ -302,26 +305,31 @@ class SceneGraphGAN(object):
         #While not all examples seen
 
         #TODO Correct data type?
-        fake_accumulator = np.empty((0, 3), dtype=np.float64)
-        real_accumulator = np.empty((0, 3), dtype=np.float64)
-        score_accumulator = np.empty((0, 1), dtype=np.float64)
 
-        pbar = tqdm(total=len(self.test_files)/512)
+        pbar = tqdm(total=len(self.test_files))
         while True:
             try:
+                fake_accumulator = np.empty((0, 3), dtype=np.float64)
+                real_accumulator = np.empty((0, 3), dtype=np.float64)
+                score_accumulator = np.empty((0, 1), dtype=np.float64)
                 #Generate A BUNCH of fake triples for a single image input
-                fake_triples, real_triples, disc_scores = sess.run([self.fake_triples, self.real_triples, self.disc_fake],\
-                    feed_dict = {self.feedable_handle : test_handle, self.training_placeholder : False})
+                for i in range(0, self.TEST_BATCH_MULTIPLIER):
+                    fake_triples, real_triples, disc_scores = sess.run([self.fake_triples, self.real_triples, self.disc_fake],\
+                        feed_dict = {self.feedable_handle : test_handle, self.training_placeholder : False})
+                    disc_scores = np.mean(disc_scores, axis=1)
 
-                disc_scores = np.mean(disc_scores, axis=1)
+                    fake_accumulator = np.append(fake_accumulator, fake_triples, axis=0)
+                    real_accumulator = np.append(real_accumulator, real_triples, axis=0)
+                    score_accumulator = np.append(score_accumulator, disc_scores, axis=0)
+
                 #Sort by discriminator score
-                indices = disc_scores.argsort()
+                indices = score_accumulator.argsort()
                 top_50_indices = indices[:50]
                 top_100_indices = indices[:100]
                 #Calculate R@ top 50 and R@ top 100 with true triples
                 #Add to the list of recalls
-                r_at_50.append(self._recall(np.squeeze(fake_triples[top_50_indices]), real_triples, 50.0))
-                r_at_100.append(self._recall(np.squeeze(fake_triples[top_100_indices]), real_triples, 100.0))
+                r_at_50.append(self._recall(np.squeeze(fake_accumulator[top_50_indices]), real_accumulator, 50.0))
+                r_at_100.append(self._recall(np.squeeze(fake_accumulator[top_100_indices]), real_accumulator, 100.0))
                 pbar.update(1)
             except Exception as e:
                 print e
